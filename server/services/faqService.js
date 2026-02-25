@@ -187,7 +187,10 @@ async function fetchGoogleAutocompleteSuggestions(topic) {
       const items = r.value?.data?.[1] || [];
       for (const item of items) {
         const clean = item.trim().toLowerCase();
-        if (clean.length > 3 && clean.length < 100) suggestions.add(clean);
+        if (clean.length < 4 || clean.length > 80) continue;
+        if (/https?|www\.|\.com|\.org|\.net|\.io/i.test(clean)) continue;
+        if (/^[a-z]{20,}/.test(clean.replace(/\s/g, ''))) continue;
+        suggestions.add(clean);
       }
     }
     if (i + batchSize < queries.length) await new Promise(r => setTimeout(r, 200));
@@ -346,11 +349,21 @@ Rules:
   // ── MERGE: Combine all sources, deduplicate ──
   const normalize = (s) => s.toLowerCase().trim().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ');
 
+  const isJunk = (s) => {
+    if (/https?|www\.|\.com|\.org|\.net|\.io/i.test(s)) return true;
+    const stripped = s.replace(/\s/g, '');
+    if (/^https?www/i.test(stripped)) return true;
+    if (/^[a-z]{25,}$/i.test(stripped)) return true;
+    return false;
+  };
+
   function dedup(arr) {
     const seen = new Set();
     return arr.filter(item => {
+      if (isJunk(item)) return false;
       const key = normalize(item);
       if (!key || key.length < 3 || seen.has(key)) return false;
+      if (isJunk(key)) return false;
       seen.add(key);
       return true;
     });
