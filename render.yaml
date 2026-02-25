@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: content-guidelines
+    runtime: node
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: YOUTUBE_API_KEY
+        sync: false
+      - key: GOOGLE_CSE_KEY
+        sync: false
+      - key: GOOGLE_CSE_CX
+        sync: false
+      - key: BING_API_KEY
+        sync: false
+      - key: BRAVE_API_KEY
+        sync: false
+      - key: ATP_API_KEY
+        sync: false
+      - key: RAPIDAPI_KEY
+        sync: false
