@@ -2,16 +2,18 @@ import { useState, useEffect } from 'react'
 import { Outlet, NavLink, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, FileText, Search, Settings, Menu, X,
-  Sun, Moon, Sparkles, MessageSquareText, Radar, GitFork
+  Sun, Moon, Sparkles, MessageSquareText, Radar, GitFork, Newspaper, Mail
 } from 'lucide-react'
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
-  { to: '/framework', icon: FileText, label: 'Content Framework' },
-  { to: '/analyzer', icon: Search, label: 'Content Analyzer' },
+  { to: '/fanout', icon: GitFork, label: 'Fanout Generator' },
   { to: '/faq-generator', icon: MessageSquareText, label: 'FAQ Generator' },
   { to: '/thread-finder', icon: Radar, label: 'Thread Finder' },
-  { to: '/fanout', icon: GitFork, label: 'Fanout Generator' },
+  { to: '/analyzer', icon: Search, label: 'Content Analyzer' },
+  { to: '/framework', icon: FileText, label: 'Content Builder' },
+  { to: '/articles', icon: Newspaper, label: 'Articles' },
+  { to: '/email', icon: Mail, label: 'Email Marketing' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ]
 

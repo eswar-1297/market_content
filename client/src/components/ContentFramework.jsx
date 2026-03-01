@@ -2,14 +2,36 @@ import { useState, useCallback, useEffect, useRef } from 'react'
 import ReactQuill from 'react-quill-new'
 import 'react-quill-new/dist/quill.snow.css'
 import {
-  CheckCircle2, Circle, Info, ChevronDown, ChevronRight,
+  CheckCircle2, Circle, Info, ChevronDown, ChevronRight, ChevronUp,
   Plus, Trash2, Copy, Download, AlertTriangle, Lightbulb,
-  Target, FileText, Save, RotateCcw
+  Target, FileText, Save, RotateCcw, ListChecks, Search, Zap, Shield, BookOpen
 } from 'lucide-react'
 import { GUIDELINES, CSABF_SECTIONS, CSABF_FORMATTING_RULES, CSABF_WORD_COUNT, SEO_METADATA, CSABF_LINKING_RULES, QUESTION_STARTERS } from '../utils/constants'
 
 const AUTOSAVE_KEY = 'csabf-builder-draft'
 const AUTOSAVE_DELAY = 2000 // 2 seconds debounce
+
+const csabfRules = [
+  { section: 'Structure', rules: ['No word count rules — structure > length', '1 H1 (8–14 words)', '4–10 H2s (ideal 6–8)', 'H3 subheadings within H2s', 'Only warn if over ~2,500 words'] },
+  { section: 'Formatting', rules: ['Max 5 lines per paragraph', 'No paragraph over 120 words', 'At least 2 bullet lists', 'Numbered lists for processes'] },
+  { section: 'SEO & Links', rules: ['Platform mentioned 8–12 times', 'Keyword density 1–1.5%', '3–5 internal links', 'Descriptive anchor text'] },
+  { section: 'AI Citation', rules: ['Key Takeaways upfront', 'Definition block when relevant', 'Task-oriented content', 'No marketing-heavy tone'] }
+]
+
+const coreSections = [
+  { name: 'FAQs', words: '4–7 Q&A, concise answers', type: 'core' },
+  { name: 'Conclusion', words: 'summary + reinforcement', type: 'core' },
+  { name: 'CloudFuze Positioning', words: 'soft positioning', type: 'flexible', note: 'Standalone H2 or embedded in Conclusion' }
+]
+
+const contextualSections = [
+  { name: 'Key Takeaways', words: 'bullet summary', type: 'contextual', when: 'Recommended for all blogs — AI engines prioritize upfront summaries' },
+  { name: 'What is [Topic]', words: 'definition block', type: 'contextual', when: 'When topic needs definition (skip for action-oriented content)' },
+  { name: 'Why It Matters', words: 'impacts + bullets', type: 'contextual', when: 'When discussing impacts, risks, compliance' },
+  { name: 'Step-by-Step / Methods', words: 'numbered steps', type: 'contextual', when: 'When content describes procedures (can be multiple method sections)' },
+  { name: 'Common Issues', words: 'bullet list', type: 'contextual', when: 'When content discusses errors or troubleshooting' },
+  { name: 'Best Practices', words: 'tips + suggestions', type: 'contextual', when: 'When content covers recommendations' }
+]
 
 // Helper to get section warnMax from constants (no strict min/max)
 function getSectionWarnMax(sectionId) {
@@ -51,6 +73,7 @@ function countSentences(text) {
 export default function ContentFramework() {
   const [activeStep, setActiveStep] = useState(0)
   const [expandedTip, setExpandedTip] = useState(null)
+  const [showGuide, setShowGuide] = useState(false)
 
   // Track which contextual sections the user has enabled
   const [enabledSections, setEnabledSections] = useState({
@@ -1035,6 +1058,131 @@ export default function ContentFramework() {
         <p className="mt-1 text-gray-600 dark:text-gray-400">
           Build AI-optimized blog content following the CSABF structure. Toggle contextual sections on/off based on your blog's topic — not every section is needed for every article.
         </p>
+      </div>
+
+      {/* CSABF Reference Guide (collapsible) */}
+      <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 overflow-hidden">
+        <button
+          onClick={() => setShowGuide(!showGuide)}
+          className="w-full flex items-center justify-between px-6 py-4 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
+        >
+          <div className="flex items-center gap-3">
+            <BookOpen className="w-5 h-5 text-indigo-500" />
+            <div className="text-left">
+              <h2 className="text-sm font-semibold text-gray-900 dark:text-white">CSABF Reference Guide</h2>
+              <p className="text-xs text-gray-500 dark:text-gray-400">Non-negotiable rules, section structure, schema & AI citation requirements</p>
+            </div>
+          </div>
+          {showGuide ? <ChevronUp className="w-5 h-5 text-gray-400" /> : <ChevronDown className="w-5 h-5 text-gray-400" />}
+        </button>
+
+        {showGuide && (
+          <div className="px-6 pb-6 space-y-6 border-t border-gray-200 dark:border-gray-800 pt-4">
+            {/* Rules Grid */}
+            <div>
+              <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-1">CSABF Non-Negotiable Rules</h3>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">Every blog post must pass these validation checks for full framework compliance.</p>
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                {csabfRules.map((group, gi) => (
+                  <div key={gi} className="rounded-lg bg-gray-50 dark:bg-gray-800/50 p-4">
+                    <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-3 flex items-center gap-2">
+                      {gi === 0 && <FileText className="w-4 h-4 text-indigo-500" />}
+                      {gi === 1 && <ListChecks className="w-4 h-4 text-emerald-500" />}
+                      {gi === 2 && <Search className="w-4 h-4 text-amber-500" />}
+                      {gi === 3 && <Zap className="w-4 h-4 text-purple-500" />}
+                      {group.section}
+                    </h4>
+                    <ul className="space-y-1.5">
+                      {group.rules.map((r, ri) => (
+                        <li key={ri} className="flex items-start gap-2 text-xs text-gray-600 dark:text-gray-400">
+                          <CheckCircle2 className="w-3 h-3 text-gray-400 flex-shrink-0 mt-0.5" />
+                          {r}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* H2 Sections */}
+            <div>
+              <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-1">H2 Sections (Core + Contextual)</h3>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">Core sections are always required. Contextual sections are suggested based on what the content is about.</p>
+
+              <h4 className="text-xs uppercase tracking-wider font-semibold text-green-600 dark:text-green-400 mb-2">Core (Always Required)</h4>
+              <div className="grid gap-2 sm:grid-cols-2 mb-4">
+                {coreSections.map((s, i) => (
+                  <div key={i} className={`flex flex-col gap-1 px-3 py-2.5 rounded-lg text-sm text-gray-700 dark:text-gray-300 ${
+                    s.type === 'flexible' ? 'bg-blue-50 dark:bg-blue-900/20' : 'bg-green-50 dark:bg-green-900/20'
+                  }`}>
+                    <div className="flex items-center gap-3">
+                      <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${
+                        s.type === 'flexible'
+                          ? 'bg-blue-100 dark:bg-blue-900 text-blue-600 dark:text-blue-400'
+                          : 'bg-green-100 dark:bg-green-900 text-green-600 dark:text-green-400'
+                      }`}>{i + 1}</span>
+                      <span>{s.name} <span className="text-gray-400">({s.words})</span></span>
+                    </div>
+                    {s.note && <span className="text-xs text-gray-400 dark:text-gray-500 ml-9">{s.note}</span>}
+                  </div>
+                ))}
+              </div>
+
+              <h4 className="text-xs uppercase tracking-wider font-semibold text-amber-600 dark:text-amber-400 mb-2">Contextual (Suggested When Relevant)</h4>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {contextualSections.map((s, i) => (
+                  <div key={i} className="flex flex-col gap-1 px-3 py-2.5 rounded-lg bg-amber-50 dark:bg-amber-900/15 text-sm text-gray-700 dark:text-gray-300">
+                    <div className="flex items-center gap-2">
+                      <span className="w-5 h-5 rounded-full bg-amber-100 dark:bg-amber-900 text-amber-600 dark:text-amber-400 flex items-center justify-center text-[10px] font-bold flex-shrink-0">?</span>
+                      <span>{s.name} <span className="text-gray-400">({s.words})</span></span>
+                    </div>
+                    <span className="text-xs text-gray-400 dark:text-gray-500 ml-7">{s.when}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Schema + AI Citation */}
+            <div className="grid gap-6 md:grid-cols-2">
+              <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+                <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-3 flex items-center gap-2">
+                  <Shield className="w-4 h-4 text-indigo-500" />
+                  Schema Requirements
+                </h3>
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-green-50 dark:bg-green-900/20 text-sm text-green-700 dark:text-green-300">
+                    <CheckCircle2 className="w-4 h-4" /> Article schema (mandatory)
+                  </div>
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-green-50 dark:bg-green-900/20 text-sm text-green-700 dark:text-green-300">
+                    <CheckCircle2 className="w-4 h-4" /> FAQ schema (mandatory)
+                  </div>
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-50 dark:bg-blue-900/20 text-sm text-blue-700 dark:text-blue-300">
+                    <Zap className="w-4 h-4" /> HowTo schema (optional, if procedural)
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+                <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-3 flex items-center gap-2">
+                  <Zap className="w-4 h-4 text-purple-500" />
+                  AI-Citation Optimization
+                </h3>
+                <div className="space-y-2 text-sm text-gray-600 dark:text-gray-400">
+                  <p>Content must be optimized for AI engines to extract, cite, and display:</p>
+                  <ul className="space-y-1.5 mt-2">
+                    {['Clear 40–60 word definition block', 'Structured numbered steps', 'Bullet summaries for key points', 'Task-oriented throughout', 'No marketing-heavy tone', 'No generic thought leadership'].map((item, i) => (
+                      <li key={i} className="flex items-center gap-2 text-xs">
+                        <CheckCircle2 className="w-3 h-3 text-purple-500 flex-shrink-0" />
+                        {item}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Progress + Total WC */}

@@ -11,14 +11,12 @@ const URL_PIPELINE_STEPS = [
   { id: 3, label: 'Gap Analysis', description: 'Identifying missing questions vs existing FAQs' },
   { id: 4, label: 'Prioritizing', description: 'Ranking questions by relevance and AEO impact' },
   { id: 5, label: 'Generating Answers', description: 'Writing optimized FAQ answers with AI' },
-  { id: 6, label: 'Building Schema', description: 'Creating JSON-LD FAQ schema markup' },
 ]
 
 const TITLE_PIPELINE_STEPS = [
   { id: 1, label: 'Questions + Keywords', description: 'Discovering FAQs and semantic keywords in parallel' },
   { id: 2, label: 'Prioritizing', description: 'Ranking questions by relevance and AEO impact' },
   { id: 3, label: 'Generating Answers', description: 'Writing optimized FAQ answers with AI' },
-  { id: 4, label: 'Building Schema', description: 'Creating JSON-LD FAQ schema markup' },
 ]
 
 export default function FAQGenerator() {
@@ -144,8 +142,6 @@ export default function FAQGenerator() {
     { id: 'faqs', label: 'Generated FAQs', icon: MessageSquare },
     ...(inputMode === 'title' ? [{ id: 'keywords', label: 'Semantic Keywords', icon: Tag }] : []),
     { id: 'pipeline', label: 'Pipeline Details', icon: BarChart3 },
-    { id: 'schema', label: 'Schema & Code', icon: Code },
-    { id: 'export', label: 'Export', icon: Download },
   ]
 
   const PIPELINE_STEPS = inputMode === 'title' ? TITLE_PIPELINE_STEPS : URL_PIPELINE_STEPS
@@ -162,8 +158,8 @@ export default function FAQGenerator() {
         </div>
         <p className="mt-1 text-gray-600 dark:text-gray-400">
           {inputMode === 'url'
-            ? 'Enter a page URL to research, generate FAQs, and schema markup for AI search engines.'
-            : 'Enter a title for a new article to generate FAQs, semantic keywords, and schema markup before writing.'
+            ? 'Enter a page URL to research and generate FAQs for AI search engines.'
+            : 'Enter a title for a new article to generate FAQs and semantic keywords before writing.'
           }
         </p>
       </div>
@@ -173,7 +169,7 @@ export default function FAQGenerator() {
         {/* Mode Toggle */}
         <div className="flex gap-1 mb-4 bg-gray-100 dark:bg-gray-800 rounded-lg p-1 w-fit">
           <button
-            onClick={() => { setInputMode('url'); setResult(null); setError(''); setPreviewData(null) }}
+            onClick={() => { setInputMode('url'); setResult(null); setError(''); setPreviewData(null); setCurrentStep(0); setStepData({}); setActiveTab('faqs') }}
             className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
               inputMode === 'url'
                 ? 'bg-white dark:bg-gray-700 text-emerald-700 dark:text-emerald-300 shadow-sm'
@@ -183,7 +179,7 @@ export default function FAQGenerator() {
             <Globe className="w-4 h-4" /> Existing Article (URL)
           </button>
           <button
-            onClick={() => { setInputMode('title'); setResult(null); setError(''); setPreviewData(null) }}
+            onClick={() => { setInputMode('title'); setResult(null); setError(''); setPreviewData(null); setCurrentStep(0); setStepData({}); setActiveTab('faqs') }}
             className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
               inputMode === 'title'
                 ? 'bg-white dark:bg-gray-700 text-emerald-700 dark:text-emerald-300 shadow-sm'
@@ -311,14 +307,6 @@ export default function FAQGenerator() {
                 {previewData.existingFAQs.length}
                 {previewData.existingFAQs.length > 0 && <span className="text-green-500 ml-1">found</span>}
                 {previewData.existingFAQs.length === 0 && <span className="text-amber-500 ml-1">none</span>}
-              </p>
-            </div>
-            <div className="rounded-lg bg-gray-50 dark:bg-gray-800/50 p-3">
-              <p className="text-[10px] font-bold text-gray-500 uppercase mb-1">FAQ Schema</p>
-              <p className="text-sm font-medium">
-                {previewData.hasFAQSchema
-                  ? <span className="text-green-600 dark:text-green-400">Present</span>
-                  : <span className="text-red-600 dark:text-red-400">Missing</span>}
               </p>
             </div>
           </div>
@@ -577,17 +565,27 @@ export default function FAQGenerator() {
                   <InfoCell label="Word Count" value={result.pageData?.wordCount?.toLocaleString()} />
                   <InfoCell label="Headings" value={result.pageData?.headingCount} />
                   <InfoCell label="Existing FAQs" value={result.pageData?.existingFAQs?.length || 0} />
-                  <InfoCell label="Has FAQ Schema" value={result.pageData?.hasFAQSchema ? 'Yes' : 'No'} />
-                  <InfoCell label="Schema Types" value={result.pageData?.existingSchemaTypes?.join(', ') || 'None'} />
                   <InfoCell label="AI Provider" value={result.provider} />
                 </div>
               </div>
 
               {/* Discovery Results */}
               <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-6">
-                <h3 className="text-base font-semibold text-gray-900 dark:text-white mb-1 flex items-center gap-2">
-                  <Search className="w-5 h-5 text-purple-500" /> Question Discovery
-                </h3>
+                <div className="flex items-center justify-between mb-1">
+                  <h3 className="text-base font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+                    <Search className="w-5 h-5 text-purple-500" /> Question Discovery
+                  </h3>
+                  <button
+                    onClick={() => copyToClipboard(
+                      result.discovery?.allQuestions?.map(q => q.question).join('\n') || '',
+                      'all-discovered'
+                    )}
+                    className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400 hover:underline"
+                  >
+                    {copied === 'all-discovered' ? <CheckCircle2 className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                    {copied === 'all-discovered' ? 'Copied!' : 'Copy all'}
+                  </button>
+                </div>
                 <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
                   Topic: <span className="font-medium text-gray-700 dark:text-gray-300">{result.discovery?.topic}</span>
                   {' · '}Primary keyword: <span className="font-medium text-gray-700 dark:text-gray-300">{result.discovery?.primaryKeyword}</span>
@@ -663,6 +661,13 @@ export default function FAQGenerator() {
                               ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300'
                               : 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300'
                           }`}>{isGap ? 'gap' : 'covered'}</span>
+                          <button
+                            onClick={() => copyToClipboard(q.question, `disc-${i}`)}
+                            className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700"
+                            title="Copy question"
+                          >
+                            {copied === `disc-${i}` ? <CheckCircle2 className="w-3.5 h-3.5 text-green-500" /> : <Copy className="w-3.5 h-3.5 text-gray-400" />}
+                          </button>
                         </div>
                       </div>
                     )
@@ -713,6 +718,13 @@ export default function FAQGenerator() {
                                   </div>
                                 </div>
                               </div>
+                              <button
+                                onClick={() => copyToClipboard(q.question, `pri-${priority}-${i}`)}
+                                className="p-1.5 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 flex-shrink-0"
+                                title="Copy question"
+                              >
+                                {copied === `pri-${priority}-${i}` ? <CheckCircle2 className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4 text-gray-400" />}
+                              </button>
                             </div>
                           </div>
                         ))}
@@ -724,112 +736,6 @@ export default function FAQGenerator() {
             </div>
           )}
 
-          {/* ═══ SCHEMA & CODE TAB ═══ */}
-          {activeTab === 'schema' && result.output && (
-            <div className="space-y-4">
-              {/* JSON-LD Schema */}
-              <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-6">
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-base font-semibold text-gray-900 dark:text-white flex items-center gap-2">
-                    <Code className="w-5 h-5 text-purple-500" /> JSON-LD FAQ Schema
-                  </h3>
-                  <button
-                    onClick={() => copyToClipboard(result.output.schemaScript, 'schema')}
-                    className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400 hover:underline"
-                  >
-                    {copied === 'schema' ? <CheckCircle2 className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                    {copied === 'schema' ? 'Copied!' : 'Copy schema'}
-                  </button>
-                </div>
-                <pre className="bg-gray-950 text-green-400 p-4 rounded-lg text-xs font-mono overflow-x-auto max-h-96 whitespace-pre-wrap">
-                  {result.output.schemaScript}
-                </pre>
-              </div>
-
-              {/* HTML with Microdata */}
-              <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-6">
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-base font-semibold text-gray-900 dark:text-white flex items-center gap-2">
-                    <FileText className="w-5 h-5 text-blue-500" /> HTML with Microdata
-                  </h3>
-                  <button
-                    onClick={() => copyToClipboard(result.output.fullHTML, 'html')}
-                    className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400 hover:underline"
-                  >
-                    {copied === 'html' ? <CheckCircle2 className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                    {copied === 'html' ? 'Copied!' : 'Copy HTML'}
-                  </button>
-                </div>
-                <pre className="bg-gray-950 text-blue-400 p-4 rounded-lg text-xs font-mono overflow-x-auto max-h-96 whitespace-pre-wrap">
-                  {result.output.fullHTML}
-                </pre>
-              </div>
-            </div>
-          )}
-
-          {/* ═══ EXPORT TAB ═══ */}
-          {activeTab === 'export' && result.output && (
-            <div className="space-y-4">
-              <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-6">
-                <h3 className="text-base font-semibold text-gray-900 dark:text-white mb-4">Export Options</h3>
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                  <ExportButton
-                    label="FAQ HTML Block"
-                    description="Clean HTML for CMS"
-                    icon={Code}
-                    onClick={() => copyToClipboard(result.output.htmlBlock, 'export-html')}
-                    copied={copied === 'export-html'}
-                  />
-                  <ExportButton
-                    label="HTML + Microdata"
-                    description="Schema.org microdata attributes"
-                    icon={FileText}
-                    onClick={() => copyToClipboard(result.output.fullHTML, 'export-full')}
-                    copied={copied === 'export-full'}
-                  />
-                  <ExportButton
-                    label="JSON-LD Schema"
-                    description="Paste in <head> section"
-                    icon={Code}
-                    onClick={() => copyToClipboard(result.output.schemaScript, 'export-schema')}
-                    copied={copied === 'export-schema'}
-                  />
-                  <ExportButton
-                    label="Markdown"
-                    description="For docs and READMEs"
-                    icon={FileText}
-                    onClick={() => copyToClipboard(result.output.markdownBlock, 'export-md')}
-                    copied={copied === 'export-md'}
-                  />
-                  <ExportButton
-                    label="JSON Data"
-                    description="Structured FAQ data"
-                    icon={Code}
-                    onClick={() => copyToClipboard(JSON.stringify(result.output.schemaJSON, null, 2), 'export-json')}
-                    copied={copied === 'export-json'}
-                  />
-                  <ExportButton
-                    label="Download All"
-                    description="HTML + Schema + Markdown"
-                    icon={Download}
-                    isDownload
-                    onClick={() => {
-                      const content = `<!-- FAQ HTML Block -->\n${result.output.fullHTML}\n\n<!-- JSON-LD Schema -->\n${result.output.schemaScript}\n\n<!-- Markdown -->\n${result.output.markdownBlock}`
-                      downloadFile(content, `faq-${new Date().toISOString().slice(0, 10)}.html`, 'text/html')
-                    }}
-                  />
-                </div>
-              </div>
-
-              {/* Markdown Preview */}
-              <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-6">
-                <h3 className="text-base font-semibold text-gray-900 dark:text-white mb-3">Markdown Preview</h3>
-                <pre className="bg-gray-50 dark:bg-gray-800/50 p-4 rounded-lg text-sm text-gray-700 dark:text-gray-300 font-mono overflow-x-auto max-h-96 whitespace-pre-wrap">
-                  {result.output.markdownBlock}
-                </pre>
-              </div>
-            </div>
-          )}
         </div>
       )}
     </div>

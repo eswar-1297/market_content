@@ -6,6 +6,8 @@ import ContentAnalyzer from './components/ContentAnalyzer'
 import FAQGenerator from './components/FAQGenerator'
 import ThreadFinder from './components/ThreadFinder'
 import FanoutGenerator from './components/FanoutGenerator'
+import Articles from './components/Articles'
+import EmailMarketing from './components/EmailMarketing'
 import SettingsPanel from './components/SettingsPanel'
 
 function App() {
@@ -18,6 +20,8 @@ function App() {
         <Route path="faq-generator" element={<FAQGenerator />} />
         <Route path="thread-finder" element={<ThreadFinder />} />
         <Route path="fanout" element={<FanoutGenerator />} />
+        <Route path="articles" element={<Articles />} />
+        <Route path="email" element={<EmailMarketing />} />
         <Route path="settings" element={<SettingsPanel />} />
       </Route>
     </Routes>

@@ -348,7 +348,6 @@ export async function fetchRedditQuestions(keyword) {
 
   console.log(`    Reddit: ${allPosts.size} unique posts found across all searches`);
 
-  // Skip posts from subreddits that are never relevant to B2B/migration/cloud topics
   const BLOCKED_SUBREDDITS = new Set([
     'freefolk', 'gameofthrones', 'asoiaf', 'wallstreetbets', 'stocks', 'investing',
     'memes', 'dankmemes', 'funny', 'pics', 'gaming', 'movies', 'television',
@@ -356,7 +355,24 @@ export async function fetchRedditQuestions(keyword) {
     'relationship_advice', 'amitheasshole', 'unpopularopinion', 'todayilearned',
     'explainlikeimfive', 'dota2', 'leagueoflegends', 'minecraft', 'fortnitebr',
     'nba', 'nfl', 'soccer', 'sports', 'fitness', 'cooking', 'food', 'recipes',
-    'diy', 'crafts', 'art', 'music', 'books', 'iama'
+    'diy', 'crafts', 'art', 'music', 'books', 'iama',
+    'tf2', 'digimon', 'pokemon', 'anime', 'manga', 'aboringdystopia',
+    'latestagecapitalism', 'antiwork', 'workreform', 'whitepeopletwitter',
+    'blackpeopletwitter', 'murderedbywords', 'clevercomebacks', 'rareinsults',
+    'wholesomememes', 'aww', 'cats', 'dogs', 'eyebleach', 'oddlysatisfying',
+    'mildlyinteresting', 'nottheonion', 'upliftingnews', 'worldnewsvideo',
+    'videos', 'gifs', 'reactiongifs', 'publicfreakout', 'fightporn',
+    'whatcouldgowrong', 'holdmybeer', 'cringe', 'cringetopia',
+    'choosingbeggars', 'entitledparents', 'insanepeoplefacebook',
+    'trashy', 'iamatotalpieceofshit', 'noahgettheboat',
+    'tinder', 'dating', 'okcupid', 'bumble', 'hinge',
+    'overwatch', 'valorant', 'apexlegends', 'roblox', 'genshinimpact',
+    'destiny2', 'eldenring', 'zelda', 'nintendo', 'playstation', 'xbox',
+    'marvelstudios', 'dccomics', 'starwars', 'harrypotter',
+    'conservative', 'liberal', 'libertarian', 'socialism', 'communism',
+    'conspiracy', 'aliens', 'paranormal', 'nosleep',
+    'legaladvice', 'personalfinance', 'frugal', 'povertyfinance',
+    'wallstreetbetsold', 'cryptocurrency', 'bitcoin', 'ethereum',
   ]);
 
   const titleQuestions = [];
@@ -369,6 +385,7 @@ export async function fetchRedditQuestions(keyword) {
 
     const title = (postData.title || '').trim();
     if (title.length < 15) continue;
+    if (/https?:\/\/|www\./i.test(title)) continue;
 
     const lower = title.toLowerCase();
     const engagement = (postData.score || 0) + (postData.num_comments || 0) * 2;

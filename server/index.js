@@ -6,7 +6,10 @@ import analyzeAIRouter from './routes/analyzeAI.js';
 import faqRouter from './routes/faq.js';
 import threadFinderRouter from './routes/threadFinder.js';
 import fanoutRouter from './routes/fanout.js';
+import articlesRouter from './routes/articles.js';
+import emailRouter from './routes/email.js';
 import { initializeDatabase } from './db/database.js';
+import { initSendGrid } from './services/emailService.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -21,6 +24,8 @@ app.use('/api/analyze-ai', analyzeAIRouter);
 app.use('/api/faq', faqRouter);
 app.use('/api/threads', threadFinderRouter);
 app.use('/api', fanoutRouter);
+app.use('/api', articlesRouter);
+app.use('/api', emailRouter);
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -57,9 +62,15 @@ app.use((err, req, res, _next) => {
 });
 
 initializeDatabase().catch(err => console.warn('Bookmark DB init:', err.message));
+initSendGrid();
 
 const server = app.listen(PORT, () => {
   console.log(`Content Guidelines API server running on http://localhost:${PORT}`);
+
+  // Preload articles cache in background
+  import('./services/articlesService.js').then(({ preloadArticles }) => {
+    preloadArticles();
+  });
 
   // Preload YouTube video cache in background so first analysis is fast
   const ytKey = process.env.YOUTUBE_API_KEY;

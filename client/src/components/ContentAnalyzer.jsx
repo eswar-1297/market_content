@@ -171,7 +171,7 @@ export default function ContentAnalyzer() {
         {/* Input Mode Toggle */}
         <div className="flex items-center gap-1 p-1 bg-gray-100 dark:bg-gray-800 rounded-lg w-fit mb-5">
           <button
-            onClick={() => { setInputMode('paste'); setError(''); setScrapedInfo(null) }}
+            onClick={() => { setInputMode('paste'); setError(''); setScrapedInfo(null); setResult(null); setContent(''); setActiveTab('suggestions') }}
             className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
               inputMode === 'paste'
                 ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
@@ -182,7 +182,7 @@ export default function ContentAnalyzer() {
             Paste Content
           </button>
           <button
-            onClick={() => { setInputMode('url'); setError('') }}
+            onClick={() => { setInputMode('url'); setError(''); setResult(null); setContent(''); setScrapedInfo(null); setActiveTab('suggestions') }}
             className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
               inputMode === 'url'
                 ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'

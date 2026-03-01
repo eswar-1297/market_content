@@ -27,3 +27,6 @@ Thumbs.db
 # Cache
 .cache/
 server/data/*.json
+server/data/*.db
+server/data/*.db-wal
+server/data/*.db-shm
