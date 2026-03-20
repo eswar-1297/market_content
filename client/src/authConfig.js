@@ -34,7 +34,7 @@ export async function getAccessToken() {
       ...loginRequest,
       account: accounts[0],
     })
-    return response.accessToken
+    return response.idToken
   } catch {
     await msalInstance.acquireTokenRedirect(loginRequest)
     return null
