@@ -1053,60 +1053,51 @@ export async function executeTool(toolName, args, writerId = 'default', articleR
         return JSON.stringify({ found: 0, message: `No community threads found for "${query}".`, sources: sourcesSummary });
       }
 
-      // Pre-format as markdown so the AI displays it verbatim with clickable links
-      let md = `**Community Threads for "${query}"** — ${totalFound} threads found (${sourcesSummary.join(' | ')})\n\n`;
+      // Build markdown directly — return as raw string so the AI passes it through verbatim
+      const sections = [];
 
       const formatSection = (title, threads, formatThread) => {
-        if (!threads || threads.length === 0) return '';
-        let section = `## ${title} (${threads.length})\n\n`;
+        if (!threads || threads.length === 0) return;
+        const lines = [`## ${title} (${threads.length})`, ''];
         threads.forEach((t, i) => {
-          section += formatThread(t, i);
+          lines.push(formatThread(t, i));
         });
-        return section + '\n';
+        sections.push(lines.join('\n'));
       };
 
-      md += formatSection('Reddit Threads', results.reddit, (t, i) => {
+      formatSection('Reddit Threads', results.reddit, (t, i) => {
         let line = `${i + 1}. [${t.title}](${t.url})`;
         if (t.community) line += ` — *${t.community}*`;
-        if (t.score) line += ` | ${t.score} upvotes`;
-        if (t.comments) line += ` | ${t.comments} comments`;
-        line += '\n';
-        if (t.snippet) line += `   > ${t.snippet.substring(0, 150)}...\n`;
-        return line + '\n';
+        const meta = [];
+        if (t.score) meta.push(`${t.score} upvotes`);
+        if (t.comments) meta.push(`${t.comments} comments`);
+        if (meta.length) line += ` | ${meta.join(' | ')}`;
+        return line;
       });
 
-      md += formatSection('Quora Threads', results.quora, (t, i) => {
+      formatSection('Quora Threads', results.quora, (t, i) => {
         let line = `${i + 1}. [${t.title}](${t.url})`;
-        if (t.score) line += ` | ${t.score} upvotes`;
-        if (t.comments) line += ` | ${t.comments} answers`;
-        line += '\n';
-        if (t.snippet) line += `   > ${t.snippet.substring(0, 150)}...\n`;
-        return line + '\n';
+        const meta = [];
+        if (t.score) meta.push(`${t.score} upvotes`);
+        if (t.comments) meta.push(`${t.comments} answers`);
+        if (meta.length) line += ` | ${meta.join(' | ')}`;
+        return line;
       });
 
-      md += formatSection('Microsoft Community Threads', results.microsoft, (t, i) => {
+      formatSection('Microsoft Community Threads', results.microsoft, (t, i) => {
         let line = `${i + 1}. [${t.title}](${t.url})`;
         if (t.forum) line += ` — *${t.forum}*`;
-        line += '\n';
-        if (t.snippet) line += `   > ${t.snippet.substring(0, 150)}...\n`;
-        return line + '\n';
+        return line;
       });
 
-      md += formatSection('Google Community Threads', results.google, (t, i) => {
+      formatSection('Google Community Threads', results.google, (t, i) => {
         let line = `${i + 1}. [${t.title}](${t.url})`;
         if (t.product) line += ` — *${t.product}*`;
-        line += '\n';
-        if (t.snippet) line += `   > ${t.snippet.substring(0, 150)}...\n`;
-        return line + '\n';
+        return line;
       });
 
-      return JSON.stringify({
-        found: totalFound,
-        query,
-        sources: sourcesSummary,
-        preformatted_markdown: md,
-        instruction: 'Display the preformatted_markdown EXACTLY as-is. Do NOT summarize, truncate, or reformat it. All links are already clickable markdown links. Do NOT add any extra commentary before or after — just output the markdown.'
-      });
+      const header = `Here are all ${totalFound} community threads for "${query}" (${sourcesSummary.join(' | ')}):\n`;
+      return header + '\n' + sections.join('\n\n');
     }
 
     case 'browse_published_articles': {
