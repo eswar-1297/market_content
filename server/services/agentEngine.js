@@ -971,7 +971,7 @@ export async function executeTool(toolName, args, writerId = 'default', articleR
           searchReddit({ query, limit: 30, sort: 'relevance', timeFilter: 'all', minScore: 0, minComments: 0 })
             .then(data => {
               const list = Array.isArray(data) ? data : (data.threads || data.results || []);
-              const threads = list.slice(0, 12).map(t => ({
+              const threads = list.slice(0, 20).map(t => ({
                 source: 'Reddit',
                 title: t.title || '',
                 url: t.url || (t.permalink ? `https://reddit.com${t.permalink}` : ''),
@@ -992,7 +992,7 @@ export async function executeTool(toolName, args, writerId = 'default', articleR
           crossReferenceQuoraSearch(query, { limit: 25, useBing: true, useGoogle: true, useCache: true })
             .then(data => {
               const list = Array.isArray(data) ? data : (data.threads || data.results || []);
-              const threads = list.slice(0, 10).map(t => ({
+              const threads = list.slice(0, 20).map(t => ({
                 source: 'Quora',
                 title: t.title || t.question || '',
                 url: t.url || t.link || '',
@@ -1020,7 +1020,7 @@ export async function executeTool(toolName, args, writerId = 'default', articleR
         found: allThreads.length,
         query,
         sources: sourcesSummary,
-        threads: allThreads.slice(0, 18)
+        threads: allThreads.slice(0, 30)
       });
     }
 
