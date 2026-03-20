@@ -8,6 +8,8 @@ import { discoverQuestions, prioritizeQuestions, generateSemanticKeywords, scrap
 import { generateFanoutQueries } from './fanoutService.js';
 import { searchReddit } from './threadFinder/reddit.js';
 import { crossReferenceQuoraSearch } from './threadFinder/crossReferenceQuora.js';
+import { crossReferenceMicrosoftTechSearch } from './threadFinder/crossReferenceMicrosoftTech.js';
+import { crossReferenceGoogleCommunitySearch } from './threadFinder/crossReferenceGoogleCommunity.js';
 import { getArticles } from './articlesService.js';
 import { checkAIDetection, checkPlagiarism, isCopyleaksConfigured, isPlagiarismConfigured } from './contentCheckService.js';
 import { searchAndFetchContent, listPages, getPageByUrl, isSharePointConfigured } from './sharepointService.js';
@@ -200,15 +202,15 @@ export const AGENT_TOOLS_OPENAI = [
     type: 'function',
     function: {
       name: 'search_community_threads',
-      description: "Search Reddit and Quora for real community discussions, questions, and threads related to a topic. Use this when the writer asks for Reddit threads, Quora discussions, community questions, or what people are actually asking online about a topic. Returns thread titles, URLs, scores, and snippets from real user conversations.",
+      description: "Search Reddit, Quora, Microsoft Tech Community, and Google Community for real discussions and threads related to a topic. Use this when the writer asks for community threads, Reddit threads, Quora discussions, Microsoft community posts, or Google community discussions. Returns threads grouped by source — never merged.",
       parameters: {
         type: 'object',
         properties: {
           query: { type: 'string', description: 'The topic or keyword to search for in community threads' },
           sources: {
             type: 'array',
-            items: { type: 'string', enum: ['reddit', 'quora'] },
-            description: 'Which sources to search. Defaults to both reddit and quora.'
+            items: { type: 'string', enum: ['reddit', 'quora', 'microsoft', 'google'] },
+            description: 'Which sources to search. Defaults to all four: reddit, quora, microsoft, google.'
           }
         },
         required: ['query']
@@ -959,11 +961,10 @@ export async function executeTool(toolName, args, writerId = 'default', articleR
     case 'search_community_threads': {
       const query = (args.query || '').toString().trim();
       if (!query) return JSON.stringify({ error: 'Query is required.' });
-      const sources = Array.isArray(args.sources) && args.sources.length > 0 ? args.sources : ['reddit', 'quora'];
+      const sources = Array.isArray(args.sources) && args.sources.length > 0 ? args.sources : ['reddit', 'quora', 'microsoft', 'google'];
 
-      const allThreads = [];
+      const results = {};
       const sourcesSummary = [];
-
       const tasks = [];
 
       if (sources.includes('reddit')) {
@@ -972,7 +973,6 @@ export async function executeTool(toolName, args, writerId = 'default', articleR
             .then(data => {
               const list = Array.isArray(data) ? data : (data.threads || data.results || []);
               const threads = list.slice(0, 20).map(t => ({
-                source: 'Reddit',
                 title: t.title || '',
                 url: t.url || (t.permalink ? `https://reddit.com${t.permalink}` : ''),
                 community: t.subreddit ? `r/${t.subreddit}` : null,
@@ -980,10 +980,10 @@ export async function executeTool(toolName, args, writerId = 'default', articleR
                 comments: t.num_comments || t.numComments || 0,
                 snippet: ((t.selftext || t.body || t.snippet || '')).substring(0, 200) || null
               })).filter(t => t.title && t.url);
-              allThreads.push(...threads);
+              results.reddit = threads;
               sourcesSummary.push(`Reddit: ${threads.length} threads`);
             })
-            .catch(e => sourcesSummary.push(`Reddit: failed (${e.message})`))
+            .catch(e => { results.reddit = []; sourcesSummary.push(`Reddit: failed (${e.message})`); })
         );
       }
 
@@ -993,34 +993,75 @@ export async function executeTool(toolName, args, writerId = 'default', articleR
             .then(data => {
               const list = Array.isArray(data) ? data : (data.threads || data.results || []);
               const threads = list.slice(0, 20).map(t => ({
-                source: 'Quora',
                 title: t.title || t.question || '',
                 url: t.url || t.link || '',
-                community: 'Quora',
                 score: t.score || t.upvotes || 0,
                 comments: t.answers || t.comments || 0,
                 snippet: ((t.snippet || t.body || t.description || '')).substring(0, 200) || null
               })).filter(t => t.title && t.url);
-              allThreads.push(...threads);
+              results.quora = threads;
               sourcesSummary.push(`Quora: ${threads.length} threads`);
             })
-            .catch(e => sourcesSummary.push(`Quora: failed (${e.message})`))
+            .catch(e => { results.quora = []; sourcesSummary.push(`Quora: failed (${e.message})`); })
+        );
+      }
+
+      if (sources.includes('microsoft')) {
+        tasks.push(
+          crossReferenceMicrosoftTechSearch(query, { limit: 20, useGoogle: true, useBing: true })
+            .then(data => {
+              const list = Array.isArray(data) ? data : (data.threads || data.results || []);
+              const threads = (Array.isArray(list) ? list : []).slice(0, 20).map(t => ({
+                title: t.title || '',
+                url: t.url || '',
+                forum: t.forum || t.product || null,
+                type: t.type || 'question',
+                snippet: ((t.snippet || t.body || '')).substring(0, 200) || null,
+                sources: t.sources || []
+              })).filter(t => t.title && t.url);
+              results.microsoft = threads;
+              sourcesSummary.push(`Microsoft Community: ${threads.length} threads`);
+            })
+            .catch(e => { results.microsoft = []; sourcesSummary.push(`Microsoft Community: failed (${e.message})`); })
+        );
+      }
+
+      if (sources.includes('google')) {
+        tasks.push(
+          crossReferenceGoogleCommunitySearch(query, { limit: 20, useGoogle: true, useBing: true })
+            .then(data => {
+              const list = Array.isArray(data) ? data : (data.threads || data.results || []);
+              const threads = (Array.isArray(list) ? list : []).slice(0, 20).map(t => ({
+                title: t.title || t.question || '',
+                url: t.url || '',
+                product: t.product || t.forum || null,
+                snippet: ((t.snippet || t.body || '')).substring(0, 200) || null,
+                sources: t.sources || []
+              })).filter(t => t.title && t.url);
+              results.google = threads;
+              sourcesSummary.push(`Google Community: ${threads.length} threads`);
+            })
+            .catch(e => { results.google = []; sourcesSummary.push(`Google Community: failed (${e.message})`); })
         );
       }
 
       await Promise.allSettled(tasks);
 
-      if (allThreads.length === 0) {
+      const totalFound = Object.values(results).reduce((sum, arr) => sum + arr.length, 0);
+
+      if (totalFound === 0) {
         return JSON.stringify({ found: 0, message: `No community threads found for "${query}".`, sources: sourcesSummary });
       }
 
-      allThreads.sort((a, b) => (b.score || 0) - (a.score || 0));
-
       return JSON.stringify({
-        found: allThreads.length,
+        found: totalFound,
         query,
         sources: sourcesSummary,
-        threads: allThreads.slice(0, 30)
+        reddit: results.reddit || [],
+        quora: results.quora || [],
+        microsoft: results.microsoft || [],
+        google: results.google || [],
+        instruction: 'Present each source as a SEPARATE section with its own heading. Do NOT merge sources together. Show ALL threads from each source.'
       });
     }
 
