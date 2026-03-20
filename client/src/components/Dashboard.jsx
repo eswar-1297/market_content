@@ -1,110 +1,47 @@
 import { Link } from 'react-router-dom'
 import {
-  FileText, Search, Settings, CheckCircle2, ArrowRight,
-  Bot, Eye, BarChart3, MessageSquareText, Radar, GitFork, Newspaper, Mail
+  CheckCircle2, ArrowRight,
+  Bot, Eye, BarChart3, Search, PenTool,
+  Radar, GitFork, MessageSquareText, Newspaper,
+  FileText, ClipboardCheck
 } from 'lucide-react'
 
 const features = [
   {
-    to: '/fanout',
-    icon: GitFork,
-    color: 'amber',
-    title: 'Fanout Generator',
-    description: 'Generate search query variations using ChatGPT, Gemini, or both for comprehensive keyword coverage.',
-    highlights: ['ChatGPT & Gemini support', 'Combined best-of-both mode', 'Domain-specific queries', 'Category classification']
-  },
-  {
-    to: '/faq-generator',
-    icon: MessageSquareText,
-    color: 'violet',
-    title: 'FAQ Generator',
-    description: 'Generate FAQs and semantic keywords from existing article URLs or new article titles using real question sources.',
-    highlights: ['Reddit & Quora questions', 'Google PAA discovery', 'JSON-LD schema output', 'Semantic keywords for new articles']
-  },
-  {
-    to: '/thread-finder',
-    icon: Radar,
-    color: 'cyan',
-    title: 'Thread Finder',
-    description: 'Discover Reddit and Quora threads where your brand can be mentioned for increased AI visibility.',
-    highlights: ['Multi-source search', 'AI cross-referencing', 'Brand mention detection', 'Visibility scoring']
-  },
-  {
-    to: '/analyzer',
-    icon: Search,
-    color: 'emerald',
-    title: 'Content Analyzer',
-    description: 'Paste your content and get instant CSABF compliance scoring, AI citation readiness analysis, and actionable suggestions.',
-    highlights: ['CSABF compliance score', 'AI Citation Readiness score', '20+ rule-based checks', 'Section structure audit']
-  },
-  {
-    to: '/framework',
-    icon: FileText,
-    color: 'indigo',
-    title: 'Content Builder',
-    description: 'Build AI-optimized blog content following the CloudFuze Standard AI Blog Framework with section-by-section guidance and structure validation.',
-    highlights: ['SEO metadata builder', 'Section structure guidance', 'AI citation optimization', 'CSABF compliance export']
-  },
-  {
-    to: '/articles',
-    icon: Newspaper,
-    color: 'rose',
-    title: 'Articles',
-    description: 'Browse all published CloudFuze articles by author and time period with real-time data from the website.',
-    highlights: ['Filter by author', 'Time period filtering', 'Auto-refreshing cache', 'Direct article links']
-  },
-  {
-    to: '/email',
-    icon: Mail,
-    color: 'sky',
-    title: 'Email Marketing',
-    description: 'Create email campaigns, manage contacts, send bulk emails via SendGrid, and track opens and clicks.',
-    highlights: ['Template builder', 'Bulk contact import', 'Open & click tracking', 'Campaign analytics']
+    to: '/copilot',
+    icon: PenTool,
+    color: 'purple',
+    title: 'Content Agent',
+    description: 'Your all-in-one AI writing assistant. Ask it anything — analyze content, get frameworks, keywords, FAQs, fanout queries, Reddit/Quora threads, published articles, G2 testimonials, YouTube videos, and real-time corrections.',
+    highlights: [
+      'Analyze pasted content (CSABF score + fixes)',
+      'Audit any published URL',
+      'FAQs + fanout queries in chat',
+      'Reddit & Quora thread search',
+      'Browse published articles',
+      'Article memory & writer profile',
+      'Full article generation (CSABF-compliant)',
+    ]
   },
 ]
 
+const agentCapabilities = [
+  { icon: Search, label: 'Content Analysis', desc: 'Paste content → CSABF score + fixes' },
+  { icon: ClipboardCheck, label: 'Article Audit', desc: 'Paste URL → full audit + FAQ gaps' },
+  { icon: GitFork, label: 'Fanout Generator', desc: 'ChatGPT + Gemini fanout queries' },
+  { icon: MessageSquareText, label: 'FAQ Generator', desc: 'Reddit, Quora & Google PAA questions' },
+  { icon: Radar, label: 'Thread Finder', desc: 'Reddit & Quora community threads' },
+  { icon: Newspaper, label: 'Published Articles', desc: 'Browse CloudFuze article library' },
+  { icon: FileText, label: 'Content Builder', desc: 'Frameworks, keywords & structure' },
+  { icon: PenTool, label: 'Article Generator', desc: 'Full CSABF article from your inputs' },
+]
+
 const colorMap = {
-  indigo: {
-    bg: 'bg-indigo-50 dark:bg-indigo-950/50',
-    icon: 'bg-indigo-100 dark:bg-indigo-900 text-indigo-600 dark:text-indigo-400',
-    border: 'border-indigo-200 dark:border-indigo-800',
-    check: 'text-indigo-500'
-  },
-  emerald: {
-    bg: 'bg-emerald-50 dark:bg-emerald-950/50',
-    icon: 'bg-emerald-100 dark:bg-emerald-900 text-emerald-600 dark:text-emerald-400',
-    border: 'border-emerald-200 dark:border-emerald-800',
-    check: 'text-emerald-500'
-  },
-  violet: {
-    bg: 'bg-violet-50 dark:bg-violet-950/50',
-    icon: 'bg-violet-100 dark:bg-violet-900 text-violet-600 dark:text-violet-400',
-    border: 'border-violet-200 dark:border-violet-800',
-    check: 'text-violet-500'
-  },
-  cyan: {
-    bg: 'bg-cyan-50 dark:bg-cyan-950/50',
-    icon: 'bg-cyan-100 dark:bg-cyan-900 text-cyan-600 dark:text-cyan-400',
-    border: 'border-cyan-200 dark:border-cyan-800',
-    check: 'text-cyan-500'
-  },
-  amber: {
-    bg: 'bg-amber-50 dark:bg-amber-950/50',
-    icon: 'bg-amber-100 dark:bg-amber-900 text-amber-600 dark:text-amber-400',
-    border: 'border-amber-200 dark:border-amber-800',
-    check: 'text-amber-500'
-  },
-  rose: {
-    bg: 'bg-rose-50 dark:bg-rose-950/50',
-    icon: 'bg-rose-100 dark:bg-rose-900 text-rose-600 dark:text-rose-400',
-    border: 'border-rose-200 dark:border-rose-800',
-    check: 'text-rose-500'
-  },
-  sky: {
-    bg: 'bg-sky-50 dark:bg-sky-950/50',
-    icon: 'bg-sky-100 dark:bg-sky-900 text-sky-600 dark:text-sky-400',
-    border: 'border-sky-200 dark:border-sky-800',
-    check: 'text-sky-500'
+  purple: {
+    bg: 'bg-purple-50 dark:bg-purple-950/50',
+    icon: 'bg-purple-100 dark:bg-purple-900 text-purple-600 dark:text-purple-400',
+    border: 'border-purple-200 dark:border-purple-800',
+    check: 'text-purple-500'
   },
 }
 
@@ -147,8 +84,28 @@ export default function Dashboard() {
         ))}
       </div>
 
-      {/* Feature cards */}
-      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+      {/* Agent capabilities — tools now merged into Content Agent */}
+      <div className="rounded-xl border border-purple-200 dark:border-purple-800 bg-purple-50 dark:bg-purple-950/30 p-5">
+        <p className="text-sm font-semibold text-purple-700 dark:text-purple-300 mb-3">
+          The following tools are now available directly inside the Content Agent — just ask!
+        </p>
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+          {agentCapabilities.map(cap => (
+            <div key={cap.label} className="flex items-start gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-purple-100 dark:bg-purple-900/50 flex items-center justify-center flex-shrink-0">
+                <cap.icon className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-gray-900 dark:text-white leading-tight">{cap.label}</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 leading-tight mt-0.5">{cap.desc}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Main feature card */}
+      <div>
         {features.map(feature => {
           const colors = colorMap[feature.color]
           return (
@@ -160,24 +117,28 @@ export default function Dashboard() {
                 p-6 transition-all duration-200 hover:shadow-lg hover:-translate-y-0.5
               `}
             >
-              <div className={`w-11 h-11 rounded-lg ${colors.icon} flex items-center justify-center mb-4`}>
-                <feature.icon className="w-5 h-5" />
+              <div className="flex items-start gap-4">
+                <div className={`w-11 h-11 rounded-lg ${colors.icon} flex items-center justify-center flex-shrink-0`}>
+                  <feature.icon className="w-5 h-5" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-1 flex items-center gap-2">
+                    {feature.title}
+                    <ArrowRight className="w-4 h-4 opacity-0 -translate-x-2 group-hover:opacity-100 group-hover:translate-x-0 transition-all" />
+                  </h3>
+                  <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                    {feature.description}
+                  </p>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-1.5">
+                    {feature.highlights.map(h => (
+                      <div key={h} className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-400">
+                        <CheckCircle2 className={`w-3.5 h-3.5 ${colors.check} flex-shrink-0`} />
+                        {h}
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2 flex items-center gap-2">
-                {feature.title}
-                <ArrowRight className="w-4 h-4 opacity-0 -translate-x-2 group-hover:opacity-100 group-hover:translate-x-0 transition-all" />
-              </h3>
-              <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-                {feature.description}
-              </p>
-              <ul className="space-y-1.5">
-                {feature.highlights.map(h => (
-                  <li key={h} className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-400">
-                    <CheckCircle2 className={`w-3.5 h-3.5 ${colors.check} flex-shrink-0`} />
-                    {h}
-                  </li>
-                ))}
-              </ul>
             </Link>
           )
         })}

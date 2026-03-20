@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Save, CheckCircle2, Bot, Sparkles } from 'lucide-react'
+import { Save, CheckCircle2, Bot, Sparkles, Zap, Server } from 'lucide-react'
 
 export default function SettingsPanel() {
   const [provider, setProvider] = useState(() => {
@@ -25,7 +25,7 @@ export default function SettingsPanel() {
       {/* Provider selection */}
       <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-6">
         <h2 className="text-base font-semibold text-gray-900 dark:text-white mb-4">AI Provider</h2>
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <ProviderCard
             name="OpenAI"
             description="Uses GPT-4o-mini for fast, accurate content analysis"
@@ -35,10 +35,24 @@ export default function SettingsPanel() {
           />
           <ProviderCard
             name="Google Gemini"
-            description="Uses Gemini 1.5 Flash for quick content evaluation"
+            description="Uses Gemini 2.0 Flash for quick content evaluation"
             icon={Sparkles}
             selected={provider === 'gemini'}
             onClick={() => setProvider('gemini')}
+          />
+          <ProviderCard
+            name="Claude"
+            description="Uses Claude Sonnet for high-quality, nuanced writing"
+            icon={Zap}
+            selected={provider === 'claude'}
+            onClick={() => setProvider('claude')}
+          />
+          <ProviderCard
+            name="Ollama (Local)"
+            description="Uses self-hosted open-source models like Llama 3.2 via SSH tunnel"
+            icon={Server}
+            selected={provider === 'ollama'}
+            onClick={() => setProvider('ollama')}
           />
         </div>
 

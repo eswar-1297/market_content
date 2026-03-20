@@ -1315,24 +1315,74 @@ function checkReadability(plainText) {
   // Conversational tone indicators
   const hasYou = /\byou\b|\byour\b/i.test(plainText);
 
+  // Word complexity (3+ syllable words)
+  const allWords = plainText.split(/\s+/).map(w => w.replace(/[^a-zA-Z]/g, '')).filter(w => w.length > 0);
+  const complexWords = allWords.filter(w => {
+    if (w.length < 4) return false;
+    let word = w.toLowerCase().replace(/(?:[^laeiouy]es|ed|[^laeiouy]e)$/, '').replace(/^y/, '');
+    const syllables = (word.match(/[aeiouy]{1,2}/g) || []).length;
+    return syllables >= 3;
+  });
+  const complexWordPct = allWords.length > 0 ? (complexWords.length / allWords.length) * 100 : 0;
+
+  // Transition words
+  const TRANSITIONS = [
+    'furthermore', 'moreover', 'additionally', 'also', 'besides', 'in addition',
+    'however', 'nevertheless', 'on the other hand', 'in contrast', 'conversely', 'although', 'whereas', 'despite', 'yet',
+    'therefore', 'consequently', 'as a result', 'thus', 'hence', 'because', 'since', 'due to',
+    'first', 'second', 'third', 'finally', 'next', 'then', 'meanwhile', 'subsequently',
+    'for example', 'for instance', 'specifically', 'in particular', 'such as',
+    'in conclusion', 'to summarize', 'in summary', 'overall', 'in short',
+    'importantly', 'significantly', 'notably', 'especially', 'particularly'
+  ];
+  const textLower = plainText.toLowerCase();
+  let transitionCount = 0;
+  for (const tw of TRANSITIONS) {
+    const regex = new RegExp(`\\b${tw.replace(/\s+/g, '\\s+')}\\b`, 'gi');
+    const matches = textLower.match(regex);
+    if (matches) transitionCount += matches.length;
+  }
+  const transitionPct = sentences.length > 0 ? (transitionCount / sentences.length) * 100 : 0;
+
+  // Consecutive sentences of same length bucket
+  let maxConsecutiveSame = 0;
+  for (let i = 1, run = 1; i < sentenceLengths.length; i++) {
+    const prevBucket = sentenceLengths[i-1] < 10 ? 's' : sentenceLengths[i-1] > 20 ? 'l' : 'm';
+    const currBucket = sentenceLengths[i] < 10 ? 's' : sentenceLengths[i] > 20 ? 'l' : 'm';
+    run = prevBucket === currBucket ? run + 1 : 1;
+    if (run > maxConsecutiveSame) maxConsecutiveSame = run;
+  }
+
   let score = 100;
   const issues = [];
 
   if (avgWordsPerSentence > 25) {
-    score -= 25;
+    score -= 20;
     issues.push(`Average sentence length is ${avgWordsPerSentence.toFixed(0)} words — aim for under 20.`);
   }
   if (passiveRate > 20) {
-    score -= 20;
+    score -= 15;
     issues.push(`${passiveRate.toFixed(0)}% passive voice detected — use active voice more.`);
   }
   if (!hasVariance) {
-    score -= 15;
+    score -= 10;
     issues.push('Sentence lengths are too uniform. Mix short, punchy sentences with longer ones.');
   }
   if (!hasYou) {
-    score -= 15;
+    score -= 10;
     issues.push('No "you/your" found. Address the reader directly for a conversational tone.');
+  }
+  if (complexWordPct > 25) {
+    score -= 15;
+    issues.push(`${complexWordPct.toFixed(0)}% complex words — simplify language for better readability.`);
+  }
+  if (transitionPct < 20 && sentences.length > 5) {
+    score -= 10;
+    issues.push(`Low transition word usage (${transitionPct.toFixed(0)}%). Add transitions for better flow.`);
+  }
+  if (maxConsecutiveSame >= 4) {
+    score -= 10;
+    issues.push(`${maxConsecutiveSame} consecutive sentences of similar length. Vary sentence rhythm.`);
   }
 
   return {
@@ -1342,7 +1392,15 @@ function checkReadability(plainText) {
     details: issues.length === 0
       ? 'Good readability: conversational tone, active voice, varied sentence lengths.'
       : issues.join(' '),
-    metrics: { avgWordsPerSentence: avgWordsPerSentence.toFixed(1), passiveRate: passiveRate.toFixed(0), hasVariance, hasYou },
+    metrics: {
+      avgWordsPerSentence: avgWordsPerSentence.toFixed(1),
+      passiveRate: passiveRate.toFixed(0),
+      hasVariance,
+      hasYou,
+      complexWordPct: complexWordPct.toFixed(0),
+      transitionPct: transitionPct.toFixed(0),
+      maxConsecutiveSame
+    },
     suggestion: issues.length > 0 ? {
       priority: 'RECOMMENDED',
       text: issues.join(' '),

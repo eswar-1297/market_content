@@ -314,22 +314,27 @@ Return ONLY valid JSON with exactly this structure — no markdown, no explanati
 ${headings ? `Headings: ${headings}` : ''}
 ${summary ? `Content Summary: ${summary.substring(0, 800)}` : ''}
 
-Generate semantic keywords for this article across 4 categories:
+Generate semantic keywords for this article across 4 categories. Keywords MUST attract CloudFuze's ideal customer profile (ICP):
+- PRIMARY TARGET: Enterprise IT decision-makers (CIOs, IT Directors, CTOs) at 500+ employee companies, US-based, in IT/Software/Financial Services, using Microsoft 365 or Google Workspace
+- SECONDARY: IT Managers/Admins at mid-size companies (250-500 employees)
+- TERTIARY: All users including small teams and individuals
 
-1. **Core Topic Keywords** (6-8): The primary terms and phrases this article MUST rank for. These are the exact search terms users type.
+1. **Core Topic Keywords** (6-8): The primary terms and phrases this article MUST rank for. Include enterprise-intent keywords (e.g., "enterprise cloud migration", "org-wide data transfer") alongside broader search terms. These are the exact search terms ICP buyers type.
 
-2. **LSI / Related Keywords** (12-15): Semantically related terms that Google and AI engines associate with this topic. Include synonyms, related concepts, industry jargon, and co-occurring terms that strengthen topical authority. These should be terms a comprehensive article on this topic would naturally mention.
+2. **LSI / Related Keywords** (12-15): Semantically related terms that Google and AI engines associate with this topic. Include enterprise concepts (compliance, data governance, scalability, security, multi-tenant), platform terms (Microsoft 365, Google Workspace, SharePoint), and co-occurring terms. These should be terms a comprehensive enterprise-focused article would naturally mention.
 
-3. **Long-Tail Phrases** (10-12): Specific multi-word search phrases that content writers can target in paragraphs and FAQ answers. These should be real queries people search for related to this topic.
+3. **Long-Tail Phrases** (10-12): Specific multi-word search phrases that enterprise IT buyers search. At least 6-8 should target enterprise scenarios (e.g., "how to migrate 10000 users from Google Drive to OneDrive", "enterprise SharePoint migration compliance requirements"). Include 2-3 broader phrases for general audience.
 
-4. **Entity Keywords** (6-8): Specific names — brands, products, tools, protocols, standards, competitors, platforms, and technical terms that are relevant. Include both the main brand/product and its competitors or alternatives.
+4. **Entity Keywords** (6-8): Specific names — platforms (Microsoft 365, Google Workspace, SharePoint, OneDrive, Dropbox, Box), compliance standards (SOC 2, HIPAA, GDPR, FedRAMP), enterprise tools, and technical terms relevant to the topic.
 
 Rules:
 - Make keywords specific to the article topic, not generic SEO terms
+- Prioritize keywords that enterprise IT decision-makers would search
 - Include a mix of informational, comparison, and transactional keyword intents
-- Long-tail phrases should be natural language queries people actually search
+- Long-tail phrases should be natural language queries enterprise buyers actually search
 - Entity keywords should include real product/brand/tool names relevant to the topic
-- Do NOT include generic terms like "SEO", "content marketing", "blog post"`;
+- Do NOT include generic terms like "SEO", "content marketing", "blog post"
+- Do NOT include competitor migration tool names (MultCloud, Mover.io, etc.)`;
 
       const response = await callLLM(prompt, systemPrompt, provider, apiKey, 'Semantic Keywords');
       return parseAIJson(response);
@@ -517,11 +522,17 @@ PAGE INFO:
 - Key Headings: ${pageData.headings.slice(0, 10).map(h => `H${h.level}: ${h.text}`).join('\n')}
 - Existing FAQs: ${pageData.existingFAQs.length > 0 ? pageData.existingFAQs.join('\n') : 'None'}
 
+ICP TARGETING — Generate questions that CloudFuze's ideal customers would ask:
+- PRIMARY: Enterprise IT decision-makers (CIOs, IT Directors, CTOs) at companies with 500+ employees, especially US-based, in IT/Software/Financial Services industries, using Microsoft 365 or Google Workspace
+- SECONDARY: IT Managers, IT Admins at mid-size companies (250-500 employees) in US/Canada/UK/Australia
+- ALSO INCLUDE: 1-2 questions for smaller teams or individual users to capture broader traffic
+
 Focus on:
 - AI search engine queries (how people phrase questions to ChatGPT/Gemini)
-- Migration-specific technical questions
-- CloudFuze-relevant commercial questions
-- Edge cases and troubleshooting questions
+- Enterprise-scale migration challenges (compliance, security, bulk migration, multi-tenant, data governance)
+- Questions mentioning Microsoft 365, Google Workspace, SharePoint, OneDrive, Google Drive
+- CloudFuze-relevant commercial questions that CIOs/IT Directors would ask before purchasing
+- Edge cases and troubleshooting questions at enterprise scale
 
 Return JSON:
 {
@@ -654,11 +665,18 @@ PRIORITIZATION CRITERIA:
 - **medium** — Good to have. Relevant question but slightly off-topic for this specific page, or less likely to be searched. Include if space allows.
 - **low** — Skip. Too generic, doesn't fit the page, or already well-covered elsewhere.
 
+ICP-BASED PRIORITY BOOST — Give HIGHER priority to questions that CloudFuze's ideal customers would ask:
+- Questions from enterprise IT buyers (CIOs, IT Directors, CTOs at 500+ employee companies) → boost to HIGH
+- Questions about enterprise concerns: compliance (SOC 2, HIPAA, GDPR, FedRAMP), security, data governance, scalability, bulk/org-wide migration → boost to HIGH
+- Questions mentioning Microsoft 365, Google Workspace, SharePoint, OneDrive → boost to HIGH
+- Questions from IT Managers/Admins at mid-size companies (250-500 employees) → boost to MEDIUM or HIGH
+- Questions only relevant to individual users with no enterprise angle → keep at MEDIUM or LOW
+
 THINK ABOUT EACH QUESTION:
-1. Would a real user search this when reading this page?
+1. Would an enterprise IT decision-maker search this when evaluating migration solutions?
 2. Would ChatGPT/Gemini/Perplexity cite our answer?
 3. Does it directly relate to the page topic (not just the general domain)?
-4. Does answering it help CloudFuze's business?
+4. Does answering it attract high-value leads for CloudFuze (Core ICP: 80-100 score)?
 
 Be strict. Not every question deserves high priority. A good FAQ section has 5-8 focused questions, not 20 generic ones.
 

@@ -521,3 +521,105 @@ export function checkTaskOrientation(text) {
   const total = taskScore + genericScore || 1;
   return Math.min(100, Math.round((taskScore / total) * 100));
 }
+
+/**
+ * Convert TipTap-style HTML back to Markdown.
+ * Preserves heading levels, lists, bold, italic, links, blockquotes, and tables.
+ */
+export function htmlToMarkdown(html) {
+  if (!html || typeof html !== 'string') return '';
+
+  let md = html;
+
+  // Normalize self-closing tags
+  md = md.replace(/<br\s*\/?>/gi, '\n');
+  md = md.replace(/<hr\s*\/?>/gi, '\n---\n');
+
+  // Headings
+  md = md.replace(/<h1[^>]*>([\s\S]*?)<\/h1>/gi, (_, inner) => `# ${inlineClean(inner)}\n\n`);
+  md = md.replace(/<h2[^>]*>([\s\S]*?)<\/h2>/gi, (_, inner) => `## ${inlineClean(inner)}\n\n`);
+  md = md.replace(/<h3[^>]*>([\s\S]*?)<\/h3>/gi, (_, inner) => `### ${inlineClean(inner)}\n\n`);
+
+  // Blockquotes — convert before paragraphs so nested <p> inside blockquote are handled
+  md = md.replace(/<blockquote[^>]*>([\s\S]*?)<\/blockquote>/gi, (_, inner) => {
+    const lines = inlineClean(inner.replace(/<p[^>]*>([\s\S]*?)<\/p>/gi, '$1\n')).split('\n').filter(l => l.trim());
+    return lines.map(l => `> ${l.trim()}`).join('\n') + '\n\n';
+  });
+
+  // Ordered lists
+  md = md.replace(/<ol[^>]*>([\s\S]*?)<\/ol>/gi, (_, inner) => {
+    let idx = 0;
+    return inner.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, (__, li) => {
+      idx++;
+      return `${idx}. ${inlineClean(li).trim()}\n`;
+    }) + '\n';
+  });
+
+  // Unordered lists
+  md = md.replace(/<ul[^>]*>([\s\S]*?)<\/ul>/gi, (_, inner) => {
+    return inner.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, (__, li) => {
+      return `- ${inlineClean(li).trim()}\n`;
+    }) + '\n';
+  });
+
+  // Tables
+  md = md.replace(/<table[^>]*>([\s\S]*?)<\/table>/gi, (_, tableInner) => {
+    const rows = [];
+    const rowMatches = tableInner.match(/<tr[^>]*>[\s\S]*?<\/tr>/gi) || [];
+    for (const row of rowMatches) {
+      const cells = [];
+      const cellMatches = row.match(/<t[hd][^>]*>([\s\S]*?)<\/t[hd]>/gi) || [];
+      for (const cell of cellMatches) {
+        const text = inlineClean(cell.replace(/<\/?t[hd][^>]*>/gi, '')).trim();
+        cells.push(text);
+      }
+      rows.push(cells);
+    }
+    if (rows.length === 0) return '';
+    let table = '| ' + rows[0].join(' | ') + ' |\n';
+    table += '| ' + rows[0].map(() => '---').join(' | ') + ' |\n';
+    for (let r = 1; r < rows.length; r++) {
+      table += '| ' + rows[r].join(' | ') + ' |\n';
+    }
+    return table + '\n';
+  });
+
+  // Paragraphs
+  md = md.replace(/<p[^>]*>([\s\S]*?)<\/p>/gi, (_, inner) => `${inlineClean(inner).trim()}\n\n`);
+
+  // Clean remaining inline tags
+  md = inlineClean(md);
+
+  // Strip any remaining HTML tags
+  md = md.replace(/<[^>]+>/g, '');
+
+  // Decode common entities
+  md = md.replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+
+  // Collapse excessive newlines
+  md = md.replace(/\n{3,}/g, '\n\n').trim();
+
+  return md;
+}
+
+function inlineClean(html) {
+  let s = html;
+  // Links: <a href="url">text</a> → [text](url)
+  s = s.replace(/<a[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, (_, url, text) => `[${text.replace(/<[^>]+>/g, '').trim()}](${url})`);
+  // Bold
+  s = s.replace(/<strong[^>]*>([\s\S]*?)<\/strong>/gi, '**$1**');
+  s = s.replace(/<b[^>]*>([\s\S]*?)<\/b>/gi, '**$1**');
+  // Italic
+  s = s.replace(/<em[^>]*>([\s\S]*?)<\/em>/gi, '*$1*');
+  s = s.replace(/<i[^>]*>([\s\S]*?)<\/i>/gi, '*$1*');
+  // Underline (no markdown equiv, keep text)
+  s = s.replace(/<u[^>]*>([\s\S]*?)<\/u>/gi, '$1');
+  // Strikethrough
+  s = s.replace(/<s[^>]*>([\s\S]*?)<\/s>/gi, '~~$1~~');
+  s = s.replace(/<del[^>]*>([\s\S]*?)<\/del>/gi, '~~$1~~');
+  // Code
+  s = s.replace(/<code[^>]*>([\s\S]*?)<\/code>/gi, '`$1`');
+  // Mark/highlight
+  s = s.replace(/<mark[^>]*>([\s\S]*?)<\/mark>/gi, '$1');
+  return s;
+}

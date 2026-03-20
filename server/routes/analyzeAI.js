@@ -16,6 +16,7 @@ router.get('/status', (req, res) => {
   res.json({
     openai: !!process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY !== 'your-openai-api-key-here',
     gemini: !!process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'your-gemini-api-key-here',
+    ollama: !!process.env.OLLAMA_BASE_URL,
     youtube: hasYouTubeKey(),
     youtubeCache: getCacheStats()
   });

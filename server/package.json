@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "type": "module",
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.78.0",
     "@google/generative-ai": "^0.21.0",
     "@sendgrid/mail": "^8.1.6",
     "axios": "^1.13.5",
@@ -11,7 +12,13 @@
     "cors": "^2.8.5",
     "dotenv": "^17.2.4",
     "express": "^4.21.0",
+    "jsonwebtoken": "^9.0.3",
+    "jwks-rsa": "^4.0.1",
     "openai": "^4.73.0",
-    "uuid": "^13.0.0"
+    "puppeteer": "^24.38.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "uuid": "^13.0.0",
+    "xlsx": "^0.18.5"
   }
 }

@@ -1,0 +1,214 @@
+{
+  "scrapedAt": "2026-03-10T12:17:40.920Z",
+  "ttlMs": 86400000,
+  "reviewCount": 12,
+  "reviews": [
+    {
+      "author": "John Habura",
+      "role": "Storage Administrator, Creative Artists Agency",
+      "rating": 4,
+      "title": "Good Dropbox to Office 365 migration experience",
+      "text": "The experience was a good one. I had a tight timeline to migrate Dropbox into our Office 365 SharePoint/OneDrive environment. We had CloudFuze manage our migration by purchasing the services. The communication was good even though the team was on the opposite side of the world. We were able to pivot and get the migration to complete within a few weeks. I would use the product again.",
+      "reviewUrl": "",
+      "product": "CloudFuze",
+      "platform": "G2",
+      "platformUrl": "https://www.g2.com/products/cloudfuze/reviews",
+      "source": "G2 Verified Review",
+      "tags": [
+        "dropbox",
+        "onedrive migration",
+        "sharepoint migration",
+        "data migration",
+        "support"
+      ]
+    },
+    {
+      "author": "Office Manager",
+      "role": "Apparel & Fashion Industry",
+      "rating": 5,
+      "title": "Super user friendly migration software",
+      "text": "The software is SUPER user friendly and literally takes a few clicks to get the migration started and the customer service is amazing as well. I have been working with Raju Burnwal and Poli Ravi who have been amazing at keeping me updated throughout the migration process.",
+      "reviewUrl": "",
+      "product": "CloudFuze",
+      "platform": "G2",
+      "platformUrl": "https://www.g2.com/products/cloudfuze/reviews",
+      "source": "G2 Verified Review",
+      "tags": [
+        "ease of use",
+        "support",
+        "data migration"
+      ]
+    },
+    {
+      "author": "Product Specialist",
+      "role": "Computer Software Industry",
+      "rating": 5,
+      "title": "Great Dropbox to OneDrive transfer service",
+      "text": "This service is really great, I have a requirement for transferring all my Dropbox business files to OneDrive. This product really handled it well and really great support team.",
+      "reviewUrl": "",
+      "product": "CloudFuze",
+      "platform": "G2",
+      "platformUrl": "https://www.g2.com/products/cloudfuze/reviews",
+      "source": "G2 Verified Review",
+      "tags": [
+        "dropbox",
+        "onedrive migration",
+        "data migration",
+        "support"
+      ]
+    },
+    {
+      "author": "Verified User",
+      "role": "IT Professional",
+      "rating": 5,
+      "title": "Easy process and very quick migration",
+      "text": "Easy Process and very quick. The sales representative was very helpful and nice to work with on this project. I like that the software vetted the information before the actual implementation took place.",
+      "reviewUrl": "",
+      "product": "CloudFuze",
+      "platform": "G2",
+      "platformUrl": "https://www.g2.com/products/cloudfuze/reviews",
+      "source": "G2 Verified Review",
+      "tags": [
+        "ease of use",
+        "data migration",
+        "support"
+      ]
+    },
+    {
+      "author": "Verified User",
+      "role": "IT Administrator",
+      "rating": 5,
+      "title": "Best Google Drive migration solution",
+      "text": "I did some extensive research on Google Drive migration solutions, and CloudFuze offered the best solution for my migration project's needs.",
+      "reviewUrl": "",
+      "product": "CloudFuze",
+      "platform": "G2",
+      "platformUrl": "https://www.g2.com/products/cloudfuze/reviews",
+      "source": "G2 Verified Review",
+      "tags": [
+        "google drive",
+        "data migration"
+      ]
+    },
+    {
+      "author": "Verified User",
+      "role": "IT Team Lead",
+      "rating": 4,
+      "title": "Responsive team that worked to get it right",
+      "text": "The CloudFuze team was very responsive and worked to get it right. One thing that we really liked about the service was how easy it was to retrieve logs.",
+      "reviewUrl": "",
+      "product": "CloudFuze",
+      "platform": "G2",
+      "platformUrl": "https://www.g2.com/products/cloudfuze/reviews",
+      "source": "G2 Verified Review",
+      "tags": [
+        "support",
+        "ease of use",
+        "data migration"
+      ]
+    },
+    {
+      "author": "Verified Reviewer",
+      "role": "Mid-Market Company",
+      "rating": 5,
+      "title": "Very communicative team throughout migration",
+      "text": "The CloudFuze team was very communicative and kept us informed at every stage. Our account manager was a quick email or phone call away. The support experience was superior compared to our previous migration provider.",
+      "reviewUrl": "",
+      "product": "CloudFuze",
+      "platform": "G2",
+      "platformUrl": "https://www.g2.com/products/cloudfuze/reviews",
+      "source": "G2 Verified Review",
+      "tags": [
+        "support",
+        "data migration",
+        "email migration"
+      ]
+    },
+    {
+      "author": "Verified User",
+      "role": "IT Manager, Mid-Market",
+      "rating": 5,
+      "title": "Cost-effective specialized migration service",
+      "text": "Our MSP quoted 10x higher for the same migration work. CloudFuze's specialized expertise delivered better results at a fraction of the cost. The value proposition is unmatched in the cloud migration space.",
+      "reviewUrl": "",
+      "product": "CloudFuze",
+      "platform": "G2",
+      "platformUrl": "https://www.g2.com/products/cloudfuze/reviews",
+      "source": "G2 Verified Review",
+      "tags": [
+        "data migration",
+        "support"
+      ]
+    },
+    {
+      "author": "Verified Customer",
+      "role": "Operations, Healthcare & Biotech",
+      "rating": 5,
+      "title": "Successful Slack to Teams migration",
+      "text": "We like the product! The migration was a success! Customer Service follow up was great!",
+      "reviewUrl": "https://www.gartner.com/reviews/market/cloud-office-migration-tools/vendor/cloudfuze/product/cloudfuze/reviews",
+      "product": "Slack to Teams Migration",
+      "platform": "Gartner",
+      "platformUrl": "https://www.gartner.com/reviews/market/cloud-office-migration-tools/vendor/cloudfuze/product/cloudfuze/reviews",
+      "source": "Gartner Peer Insights Verified Review",
+      "tags": [
+        "slack to teams",
+        "support",
+        "data migration"
+      ]
+    },
+    {
+      "author": "Verified Reviewer",
+      "role": "Enterprise IT",
+      "rating": 5,
+      "title": "Data integrity exceeded expectations",
+      "text": "The end result of both the first migration and delta migration exceeded my expectations 10 fold. Considering the sensitivity of the data that was being moved, we did not lose any integrity or run into any sort of permissions or versioning issues with the files.",
+      "reviewUrl": "https://www.gartner.com/reviews/market/cloud-office-migration-tools/vendor/cloudfuze/product/cloudfuze/reviews",
+      "product": "CloudFuze",
+      "platform": "Gartner",
+      "platformUrl": "https://www.gartner.com/reviews/market/cloud-office-migration-tools/vendor/cloudfuze/product/cloudfuze/reviews",
+      "source": "Gartner Peer Insights Verified Review",
+      "tags": [
+        "delta migration",
+        "data migration",
+        "permissions",
+        "security"
+      ]
+    },
+    {
+      "author": "Sales & Business Development",
+      "role": "Services Company",
+      "rating": 5,
+      "title": "Seamless ShareFile to Google migration",
+      "text": "We engaged CloudFuze to help us with our ShareFile to Google migration. It was very important that we had all our files from the past twenty years transferred seamlessly without any issues or missing files. CloudFuze was able to help us with this goal. They were very cost effective and provided excellent service and support by every member of the CloudFuze Team I interacted with.",
+      "reviewUrl": "https://www.gartner.com/reviews/market/cloud-office-migration-tools/vendor/cloudfuze/product/cloudfuze/reviews",
+      "product": "CloudFuze",
+      "platform": "Gartner",
+      "platformUrl": "https://www.gartner.com/reviews/market/cloud-office-migration-tools/vendor/cloudfuze/product/cloudfuze/reviews",
+      "source": "Gartner Peer Insights Verified Review",
+      "tags": [
+        "google drive",
+        "data migration",
+        "support"
+      ]
+    },
+    {
+      "author": "IT Professional",
+      "role": "IT Services, 50M-250M USD",
+      "rating": 5,
+      "title": "Complex ShareFile migration handled expertly",
+      "text": "We engaged CloudFuze to assist with a complex Citrix ShareFile to Citrix ShareFile migration, which was occurring due to an acquisition. The migration consisted of hundreds of thousands of files and folders, with a difficult permission structure in place. CloudFuze was able to migrate the data and permissions from the source to the destination, and worked very hard to ensure the project was a success.",
+      "reviewUrl": "https://www.gartner.com/reviews/market/cloud-office-migration-tools/vendor/cloudfuze/product/cloudfuze/reviews",
+      "product": "CloudFuze",
+      "platform": "Gartner",
+      "platformUrl": "https://www.gartner.com/reviews/market/cloud-office-migration-tools/vendor/cloudfuze/product/cloudfuze/reviews",
+      "source": "Gartner Peer Insights Verified Review",
+      "tags": [
+        "permissions",
+        "data migration",
+        "support",
+        "tenant migration"
+      ]
+    }
+  ]
+}

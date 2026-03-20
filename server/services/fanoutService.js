@@ -60,14 +60,21 @@ Each fanout query MUST:
 6. Be citation-worthy
 7. Be information-dense
 
+ICP TARGETING — Generate sub-queries that CloudFuze's ideal customers search for:
+- PRIMARY: Enterprise IT decision-makers (CIOs, IT Directors, CTOs) at 500+ employee companies, US-based, in IT/Software/Financial Services, using Microsoft 365 or Google Workspace
+- At least 60% of sub-queries should address enterprise concerns: compliance (SOC 2, HIPAA, GDPR, FedRAMP), security, scalability, bulk migration, data governance, multi-tenant environments
+- Include sub-queries about enterprise platforms: Microsoft 365, Google Workspace, SharePoint, OneDrive
+- Include 2-3 sub-queries for broader audiences (IT Managers, smaller teams) to capture wider traffic
+
 STRATEGIC CATEGORIES FOR SUB-QUERIES:
 
 - 📘 **core_facts** – Foundational knowledge, definitions, key components
 - 📚 **background** – Context, history, significance
 - ⚖️ **comparisons** – Alternatives, pros/cons, tradeoffs
-- ⚠️ **edge_cases** – Limitations, risks, pitfalls
-- 🛠️ **implementation** – Practical how-to guidance, tools
-- 📊 **evaluation** – Metrics, KPIs, success measurement
+- ⚠️ **edge_cases** – Limitations, risks, pitfalls, enterprise-specific challenges
+- 🛠️ **implementation** – Practical how-to guidance, tools, enterprise deployment
+- 📊 **evaluation** – Metrics, KPIs, success measurement, ROI for enterprises
+- 🔒 **compliance_security** – Compliance standards, data governance, security certifications
 - 🚀 **follow_up** – Advanced topics, future trends, next steps
 
 OUTPUT FORMAT (JSON Only):
