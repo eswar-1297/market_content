@@ -2409,6 +2409,11 @@ You are writing AS ${params.writerName}. The article MUST sound like ${params.wr
   return parts.join('\n\n');
 }
 
+function safeParseToolResult(result) {
+  try { return JSON.parse(result); }
+  catch { return { rawText: result }; }
+}
+
 // ═══ AGENT LOOP — OPENAI ═══
 
 async function runAgentOpenAI(systemPrompt, userPrompt, provider, articleRequirements = {}, onToolCall = null) {
@@ -2450,7 +2455,7 @@ async function runAgentOpenAI(systemPrompt, userPrompt, provider, articleRequire
         if (onToolCall) onToolCall({ phase: 'tool_start', tool: fnName, step });
 
         const result = await executeTool(fnName, fnArgs, writerIdForTool, articleRequirements);
-        const parsed = JSON.parse(result);
+        const parsed = safeParseToolResult(result);
         toolsUsed.push({ tool: fnName, args: fnArgs, result: parsed });
 
         // Notify: tool complete
@@ -2520,7 +2525,7 @@ async function runAgentGemini(systemPrompt, userPrompt, provider, articleRequire
       if (onToolCall) onToolCall({ phase: 'tool_start', tool: fnName, step });
 
       const result = await executeTool(fnName, fnArgs, writerIdForTool, articleRequirements);
-      const parsed = JSON.parse(result);
+      const parsed = safeParseToolResult(result);
       toolsUsed.push({ tool: fnName, args: fnArgs, result: parsed });
 
       if (onToolCall) onToolCall({ phase: 'tool_done', tool: fnName, step, result: parsed });
@@ -2594,7 +2599,7 @@ async function runAgentClaude(systemPrompt, userPrompt, provider, articleRequire
       if (onToolCall) onToolCall({ phase: 'tool_start', tool: fnName, step });
 
       const result = await executeTool(fnName, fnArgs, writerIdForTool, articleRequirements);
-      const parsed = JSON.parse(result);
+      const parsed = safeParseToolResult(result);
       toolsUsed.push({ tool: fnName, args: fnArgs, result: parsed });
 
       if (onToolCall) onToolCall({ phase: 'tool_done', tool: fnName, step, result: parsed });
@@ -2673,7 +2678,7 @@ async function runAgentOllama(systemPrompt, userPrompt, provider, articleRequire
           const writerIdForTool = articleRequirements._writerName?.toLowerCase() || 'default';
           const result = await executeTool(fnName, fnArgs, writerIdForTool, articleRequirements);
 
-          toolsUsed.push({ tool: fnName, args: fnArgs, result: JSON.parse(result) });
+          toolsUsed.push({ tool: fnName, args: fnArgs, result: safeParseToolResult(result) });
 
           messages.push({
             role: 'tool',
