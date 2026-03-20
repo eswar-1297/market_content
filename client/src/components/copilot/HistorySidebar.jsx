@@ -18,7 +18,17 @@ export default function HistorySidebar({ onLoadSession, onNewSession, currentSes
     setLoading(true)
     try {
       const res = await authFetch(`/api/copilot/sessions?writerId=${encodeURIComponent(userId)}`)
-      if (res.ok) setSessions(await res.json())
+      if (res.ok) {
+        setSessions(await res.json())
+      } else if (res.status === 401) {
+        // Token might not be ready yet after refresh — retry once after a short delay
+        setTimeout(() => {
+          authFetch(`/api/copilot/sessions?writerId=${encodeURIComponent(userId)}`)
+            .then(r => r.ok ? r.json() : [])
+            .then(data => { if (Array.isArray(data)) setSessions(data) })
+            .catch(() => {})
+        }, 1500)
+      }
     } catch {} finally { setLoading(false) }
   }
 

@@ -352,7 +352,7 @@ router.get('/articles/related', (req, res) => {
 
 router.get('/sessions', (req, res) => {
   try {
-    const { writerId = 'default' } = req.query;
+    const writerId = req.user?.email || req.query.writerId || 'default';
     res.json(listSessions(writerId));
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -361,9 +361,10 @@ router.get('/sessions', (req, res) => {
 
 router.post('/sessions', (req, res) => {
   try {
-    const { topic, writerId = 'default', writerName = '' } = req.body;
+    const writerId = req.user?.email || req.body.writerId || 'default';
+    const writerName = req.user?.name || req.body.writerName || '';
+    const { topic } = req.body;
     if (!topic?.trim()) return res.status(400).json({ error: 'Topic is required' });
-    // Auto-create writer if they don't exist (for new Microsoft login users)
     if (writerId !== 'default') {
       createWriter(writerId, writerName || writerId.split('@')[0] || writerId, writerId);
     }
