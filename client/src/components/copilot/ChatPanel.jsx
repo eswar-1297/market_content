@@ -47,10 +47,21 @@ export default function ChatPanel({ messages, onSendMessage, loading, onSetWrite
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
+  const autoResize = () => {
+    const el = inputRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+  }
+
   const handleSend = () => {
     const text = input.trim()
     if (!text || loading) return
     setInput('')
+    // Reset height after clearing
+    if (inputRef.current) {
+      inputRef.current.style.height = 'auto'
+    }
     if (sharepointMode) {
       const spPrompt = `[SHAREPOINT LOOKUP] Search the internal SharePoint DOC360 site for: ${text}. Use the search_sharepoint_docs tool to find this information. Do NOT guess — only return data found in SharePoint.`
       onSendMessage(spPrompt, `SharePoint: ${text}`)
@@ -142,12 +153,12 @@ export default function ChatPanel({ messages, onSendMessage, loading, onSetWrite
             <textarea
               ref={inputRef}
               value={input}
-              onChange={e => setInput(e.target.value)}
+              onChange={e => { setInput(e.target.value); autoResize() }}
               onKeyDown={handleKeyDown}
               placeholder={sharepointMode ? "Ask about CloudFuze features, golden combos, migration paths..." : "Type your topic or ask anything..."}
               rows={1}
-              className="flex-1 bg-transparent text-sm text-gray-900 dark:text-gray-100 placeholder-gray-400 resize-none focus:outline-none max-h-24 overflow-y-auto"
-              style={{ minHeight: '24px' }}
+              className="flex-1 bg-transparent text-sm text-gray-900 dark:text-gray-100 placeholder-gray-400 resize-none focus:outline-none overflow-hidden"
+              style={{ minHeight: '24px', maxHeight: '200px', overflowY: 'auto' }}
               disabled={loading}
             />
             <button

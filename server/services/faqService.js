@@ -102,8 +102,8 @@ function parseAIJson(text) {
 
 async function callLLM(prompt, systemPrompt, provider, apiKey, stepLabel = '') {
   const start = Date.now();
-  const model = provider === 'openai' ? 'gpt-4o-mini' : 'gemini-2.0-flash';
-  console.log(`  ${C.dim}├─${C.reset} ${C.magenta}Calling ${provider.toUpperCase()} (${model})...${C.reset}${stepLabel ? ` [${stepLabel}]` : ''}`);
+  const modelName = provider === 'openai' ? 'gpt-4o-mini' : provider === 'claude' ? 'claude-sonnet-4-20250514' : 'gemini-2.0-flash';
+  console.log(`  ${C.dim}├─${C.reset} ${C.magenta}Calling ${provider.toUpperCase()} (${modelName})...${C.reset}${stepLabel ? ` [${stepLabel}]` : ''}`);
   console.log(`  ${C.dim}│  ├─ Prompt length: ${prompt.length} chars${C.reset}`);
 
   if (provider === 'openai') {
@@ -121,6 +121,21 @@ async function callLLM(prompt, systemPrompt, provider, apiKey, stepLabel = '') {
     const tokens = response.usage;
     console.log(`  ${C.dim}│  ├─ Response: ${text.length} chars in ${Date.now() - start}ms${C.reset}`);
     if (tokens) console.log(`  ${C.dim}│  └─ Tokens: ${tokens.prompt_tokens} prompt + ${tokens.completion_tokens} completion = ${tokens.total_tokens} total${C.reset}`);
+    return text;
+  }
+
+  if (provider === 'claude') {
+    const { default: Anthropic } = await import('@anthropic-ai/sdk');
+    const client = new Anthropic({ apiKey, timeout: AI_TIMEOUT_MS });
+    const response = await client.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 4000,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.3
+    });
+    const text = response.content.filter(b => b.type === 'text').map(b => b.text).join('\n') || '';
+    console.log(`  ${C.dim}│  └─ Response: ${text.length} chars in ${Date.now() - start}ms${C.reset}`);
     return text;
   }
 
@@ -648,6 +663,7 @@ export function analyzeGaps(discoveredQuestions, existingFAQs) {
 // ═══ STEP 5: Prioritize questions ═══
 
 export async function prioritizeQuestions(questions, pageData, provider, apiKey) {
+  if (!questions || questions.length === 0) return { prioritizedQuestions: [] };
   const prompt = `You are an AEO (Answer Engine Optimization) expert for CloudFuze, a cloud migration platform.
 
 Prioritize each question for FAQ inclusion on this page. Assign a priority level and explain your reasoning.

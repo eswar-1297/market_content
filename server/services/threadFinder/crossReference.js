@@ -157,26 +157,15 @@ function calculateRelevanceScore(thread, query) {
   return score
 }
 
-// Search Reddit directly
+// Search Reddit directly (with OAuth support)
 async function searchRedditDirect(query, sort = 'relevance', limit = 100) {
   try {
+    const { redditFetch } = await import('../redditAuth.js')
     const url = `https://www.reddit.com/search.json?q=${encodeURIComponent(query)}&sort=${sort}&t=all&limit=${limit}`
-    
+
     console.log(`Reddit (${sort}):`, url.substring(0, 80) + '...')
-    
-    const response = await fetch(url, {
-      headers: {
-        'User-Agent': REDDIT_USER_AGENT,
-        'Accept': 'application/json'
-      }
-    })
-    
-    if (!response.ok) {
-      console.error('Reddit API error:', response.status)
-      return []
-    }
-    
-    const data = await response.json()
+
+    const data = await redditFetch(url)
     
     if (!data?.data?.children) return []
     

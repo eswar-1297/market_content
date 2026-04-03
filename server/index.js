@@ -31,6 +31,21 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+// Langfuse connectivity test (public — no auth needed)
+app.get('/api/test-langfuse', async (req, res) => {
+  const { getLangfuse, flushLangfuse } = await import('./services/langfuseService.js');
+  const lf = getLangfuse();
+  if (!lf) return res.status(500).json({ ok: false, error: 'Langfuse not configured — check LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY in .env' });
+  try {
+    const trace = lf.trace({ name: 'connectivity-test', userId: 'test-user', input: { message: 'Content Agent connectivity test' } });
+    trace.update({ output: 'Connection successful' });
+    await flushLangfuse();
+    res.json({ ok: true, traceId: trace.id, message: 'Trace sent — check your Langfuse dashboard' });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // Auth middleware for all /api routes below this line
 app.use('/api', requireAuth);
 
@@ -76,6 +91,12 @@ initSendGrid();
 
 const server = app.listen(PORT, () => {
   console.log(`Content Guidelines API server running on http://localhost:${PORT}`);
+
+  // Initialize Langfuse if keys are configured
+  import('./services/langfuseService.js').then(({ getLangfuse }) => {
+    const lf = getLangfuse();
+    if (!lf) console.log('[Langfuse] Not configured — add LANGFUSE_PUBLIC_KEY + LANGFUSE_SECRET_KEY to .env to enable tracing');
+  });
 
   // Preload articles cache in background
   import('./services/articlesService.js').then(({ preloadArticles }) => {

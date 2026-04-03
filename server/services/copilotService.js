@@ -2,7 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { COPILOT_SYSTEM_PROMPT, buildPlanPrompt, buildCorrectionsPrompt, buildProfileAnalysisPrompt } from '../utils/copilotPrompts.js';
 import { ingestArticle, findRelatedArticles, listArticles, getWriterProfile, rebuildWriterProfile } from './memoryService.js';
 import { trackKeywords } from './keywordEngine.js';
-import { createSession, updateSession, getSession } from '../db/copilotDb.js';
+import { createSession, updateSession, getSession, createWriter } from '../db/copilotDb.js';
 import { analyzeContent } from './ruleEngine.js';
 
 /**
@@ -17,6 +17,9 @@ export async function generateWritingPlan(topic, writerId, aiProvider) {
   const prompt = buildPlanPrompt(topic, pastArticles.length > 0 ? pastArticles : allArticles.slice(0, 10), writerProfile);
   const plan = await callAI(prompt, COPILOT_SYSTEM_PROMPT, aiProvider);
 
+  if (writerId !== 'default') {
+    createWriter(writerId, writerId.split('@')[0] || writerId, writerId);
+  }
   const sessionId = uuidv4();
   const session = createSession({
     id: sessionId,

@@ -17,6 +17,7 @@ import { getWriterBio, formatWriterBioForPrompt } from '../config/writerBios.js'
 import { formatBlogPatternsForPrompt, formatWriterPatternsForPrompt } from '../config/blogPatterns.js';
 import { htmlToMarkdown } from '../utils/contentParser.js';
 import { ICP_FRAMEWORK } from '../utils/copilotPrompts.js';
+import { startTrace, flushLangfuse } from './langfuseService.js';
 
 // ═══ RESEARCH CACHE (10 min TTL) — avoids re-running FAQ+Fanout for same topic ═══
 const researchCache = new Map();
@@ -424,8 +425,8 @@ export async function executeTool(toolName, args, writerId = 'default', articleR
       if (rawContent.length < 20) return JSON.stringify({ error: 'Content too short to analyze.' });
 
       try {
-        const provider = articleRequirements._aiProvider?.type || (process.env.OPENAI_API_KEY ? 'openai' : (process.env.GEMINI_API_KEY ? 'gemini' : 'claude'));
-        const apiKey = provider === 'openai' ? process.env.OPENAI_API_KEY : provider === 'gemini' ? process.env.GEMINI_API_KEY : provider === 'claude' ? process.env.ANTHROPIC_API_KEY : (process.env.OPENAI_API_KEY || process.env.GEMINI_API_KEY || process.env.ANTHROPIC_API_KEY);
+        const provider = articleRequirements._aiProvider?.type || 'openai';
+        const apiKey = articleRequirements._aiProvider?.apiKey || (provider === 'openai' ? process.env.OPENAI_API_KEY : provider === 'gemini' ? process.env.GEMINI_API_KEY : provider === 'claude' ? process.env.ANTHROPIC_API_KEY : null);
 
         const isURL = /^https?:\/\/[^\s]+$/i.test(rawContent);
         let csabfInput = rawContent;
@@ -841,8 +842,8 @@ export async function executeTool(toolName, args, writerId = 'default', articleR
       const topicStr = (args.topic || '').toString().trim();
       if (!topicStr) return JSON.stringify({ error: 'Topic is required.' });
       try {
-        const provider = articleRequirements._aiProvider?.type || (process.env.OPENAI_API_KEY ? 'openai' : (process.env.GEMINI_API_KEY ? 'gemini' : 'claude'));
-        const apiKey = provider === 'openai' ? process.env.OPENAI_API_KEY : provider === 'gemini' ? process.env.GEMINI_API_KEY : provider === 'claude' ? process.env.ANTHROPIC_API_KEY : (process.env.OPENAI_API_KEY || process.env.GEMINI_API_KEY || process.env.ANTHROPIC_API_KEY);
+        const provider = articleRequirements._aiProvider?.type || 'openai';
+        const apiKey = articleRequirements._aiProvider?.apiKey || (provider === 'openai' ? process.env.OPENAI_API_KEY : provider === 'gemini' ? process.env.GEMINI_API_KEY : provider === 'claude' ? process.env.ANTHROPIC_API_KEY : null);
         if (!apiKey) return JSON.stringify({ error: 'No AI API key configured.' });
 
         const pageData = { url: null, title: topicStr, h1: topicStr, headings: [], paragraphs: [], existingFAQs: [], wordCount: 0, existingSchema: [], hasFAQSchema: false, summary: '' };
@@ -862,20 +863,84 @@ export async function executeTool(toolName, args, writerId = 'default', articleR
         const keywordsData = keywordsResult.status === 'fulfilled' ? keywordsResult.value : null;
 
         const prioritizedQs = discoverData?.prioritized?.prioritizedQuestions || [];
-        const faqQuestions = prioritizedQs.map(f => ({
+
+        // If discovery returned no questions (all real sources + AI failed), generate
+        // fallback FAQs via AI so we never show only fanout queries.
+        let effectiveQs = prioritizedQs;
+        if (effectiveQs.length === 0) {
+          try {
+            const fallbackProvider = articleRequirements._aiProvider?.type || 'openai';
+            const fallbackKey = articleRequirements._aiProvider?.apiKey || (fallbackProvider === 'openai' ? process.env.OPENAI_API_KEY : fallbackProvider === 'gemini' ? process.env.GEMINI_API_KEY : process.env.ANTHROPIC_API_KEY);
+            if (fallbackKey) {
+              const { callLLM: faqLLM } = await import('./faqService.js').then(m => ({ callLLM: null })).catch(() => ({ callLLM: null }));
+              // Use the fanout queries themselves to seed real FAQ questions
+              const fanoutSeed = (fanoutData?.fanouts || []).map(f => f.query).slice(0, 6).join('\n');
+              const fallbackPrompt = `You are an AEO expert for CloudFuze, a cloud migration platform.
+Generate 8-10 real FAQ questions that enterprise IT buyers (CIOs, IT Directors) would ask about: "${topicStr}"
+
+These should be questions people actually search on Google, ask ChatGPT/Perplexity, or discuss on Reddit/Quora.
+Focus on: migration challenges, compliance (SOC 2, HIPAA, GDPR), bulk migration, Microsoft 365, Google Workspace, SharePoint.
+
+Related queries to consider:
+${fanoutSeed}
+
+Return JSON: { "prioritizedQuestions": [{ "question": "...", "source": "ai-generated", "intent": "informational|transactional|comparison", "priority": "high|medium|low", "aiCitationScore": 0 }] }
+Put 5-6 as high, 3-4 as medium. High = questions ChatGPT/Gemini would cite answers to.`;
+              const raw = await import('./faqService.js').then(async m => {
+                // callLLM is not exported from faqService — use the agent's own provider
+                const { default: OpenAI } = await import('openai');
+                if (fallbackProvider === 'openai') {
+                  const client = new OpenAI({ apiKey: fallbackKey, timeout: 30000 });
+                  const resp = await client.chat.completions.create({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: fallbackPrompt }], temperature: 0.3, max_tokens: 2000 });
+                  return resp.choices?.[0]?.message?.content || '';
+                }
+                if (fallbackProvider === 'gemini') {
+                  const { GoogleGenerativeAI } = await import('@google/generative-ai');
+                  const genAI = new GoogleGenerativeAI(fallbackKey);
+                  const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+                  const result = await model.generateContent(fallbackPrompt);
+                  return (await result.response).text();
+                }
+                if (fallbackProvider === 'claude') {
+                  const { default: Anthropic } = await import('@anthropic-ai/sdk');
+                  const client = new Anthropic({ apiKey: fallbackKey, timeout: 30000 });
+                  const resp = await client.messages.create({ model: 'claude-sonnet-4-20250514', max_tokens: 2000, messages: [{ role: 'user', content: fallbackPrompt }] });
+                  return resp.content.filter(b => b.type === 'text').map(b => b.text).join('') || '';
+                }
+                return '';
+              });
+              if (raw) {
+                const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+                try {
+                  const parsed = JSON.parse(cleaned);
+                  effectiveQs = parsed.prioritizedQuestions || [];
+                } catch { /* ignore parse error, fallback to empty */ }
+              }
+            }
+          } catch { /* ignore fallback errors — fanout will fill the gap */ }
+        }
+
+        const faqQuestions = effectiveQs.map(f => ({
           question: f.question,
           priority: f.priority || 'medium',
-          aiCitationScore: f.aiCitationScore || 0,
+          // Derive aiCitationScore from priority — prioritizeQuestions doesn't return this field
+          // so we assign it here to ensure real FAQs always rank above uncovered fanout queries.
+          aiCitationScore: f.aiCitationScore || (
+            f.priority === 'high' ? 80 :
+            f.priority === 'medium' ? 50 :
+            20
+          ),
           intent: f.intent || 'informational',
           source: f.source || 'unknown',
           sources: ['faq-pipeline'],
           boost: 0
         }));
 
+        // Fanout queries get a lower base score (35) so real FAQs always rank above them
         const fanoutQueries = (fanoutData?.fanouts || []).map(f => ({
           question: f.query,
           priority: 'medium',
-          aiCitationScore: 50,
+          aiCitationScore: 35,
           intent: 'informational',
           category: f.category,
           purpose: f.purpose,
@@ -1349,8 +1414,8 @@ export async function executeTool(toolName, args, writerId = 'default', articleR
       if (!topicStr) return JSON.stringify({ error: 'Topic is required to generate a framework.' });
 
       try {
-        const provider = articleRequirements._aiProvider?.type || (process.env.OPENAI_API_KEY ? 'openai' : (process.env.GEMINI_API_KEY ? 'gemini' : 'claude'));
-        const apiKey = provider === 'openai' ? process.env.OPENAI_API_KEY : provider === 'gemini' ? process.env.GEMINI_API_KEY : provider === 'claude' ? process.env.ANTHROPIC_API_KEY : (process.env.OPENAI_API_KEY || process.env.GEMINI_API_KEY || process.env.ANTHROPIC_API_KEY);
+        const provider = articleRequirements._aiProvider?.type || 'openai';
+        const apiKey = articleRequirements._aiProvider?.apiKey || (provider === 'openai' ? process.env.OPENAI_API_KEY : provider === 'gemini' ? process.env.GEMINI_API_KEY : provider === 'claude' ? process.env.ANTHROPIC_API_KEY : null);
         if (!apiKey) return JSON.stringify({ error: 'No AI API key configured.' });
 
         const contentType = args.content_type || 'educational';
@@ -1765,8 +1830,8 @@ Output ONLY the Markdown framework + keywords section. No preamble, no commentar
       }
 
       try {
-        const provider = articleRequirements._aiProvider?.type || (process.env.OPENAI_API_KEY ? 'openai' : (process.env.GEMINI_API_KEY ? 'gemini' : 'claude'));
-        const apiKey = provider === 'openai' ? process.env.OPENAI_API_KEY : provider === 'gemini' ? process.env.GEMINI_API_KEY : provider === 'claude' ? process.env.ANTHROPIC_API_KEY : (process.env.OPENAI_API_KEY || process.env.GEMINI_API_KEY || process.env.ANTHROPIC_API_KEY);
+        const provider = articleRequirements._aiProvider?.type || 'openai';
+        const apiKey = articleRequirements._aiProvider?.apiKey || (provider === 'openai' ? process.env.OPENAI_API_KEY : provider === 'gemini' ? process.env.GEMINI_API_KEY : provider === 'claude' ? process.env.ANTHROPIC_API_KEY : null);
         if (!apiKey) return JSON.stringify({ error: 'No AI API key configured.' });
 
         // Detect if the content is a framework/outline (headings + brief guides) vs a full article
@@ -1899,8 +1964,8 @@ RULES:
       if (!topicStr) return JSON.stringify({ error: 'Topic is required to generate an article.' });
 
       try {
-        const provider = articleRequirements._aiProvider?.type || (process.env.OPENAI_API_KEY ? 'openai' : (process.env.GEMINI_API_KEY ? 'gemini' : 'claude'));
-        const apiKey = provider === 'openai' ? process.env.OPENAI_API_KEY : provider === 'gemini' ? process.env.GEMINI_API_KEY : provider === 'claude' ? process.env.ANTHROPIC_API_KEY : (process.env.OPENAI_API_KEY || process.env.GEMINI_API_KEY || process.env.ANTHROPIC_API_KEY);
+        const provider = articleRequirements._aiProvider?.type || 'openai';
+        const apiKey = articleRequirements._aiProvider?.apiKey || (provider === 'openai' ? process.env.OPENAI_API_KEY : provider === 'gemini' ? process.env.GEMINI_API_KEY : provider === 'claude' ? process.env.ANTHROPIC_API_KEY : null);
         if (!apiKey) return JSON.stringify({ error: 'No AI API key configured.' });
 
         // Gather writer context
@@ -2419,6 +2484,7 @@ function safeParseToolResult(result) {
 async function runAgentOpenAI(systemPrompt, userPrompt, provider, articleRequirements = {}, onToolCall = null) {
   const { default: OpenAI } = await import('openai');
   const client = new OpenAI({ apiKey: provider.apiKey, timeout: 120000 });
+  const lfTrace = articleRequirements._langfuseTrace || null;
 
   const messages = [
     { role: 'system', content: systemPrompt },
@@ -2432,6 +2498,7 @@ async function runAgentOpenAI(systemPrompt, userPrompt, provider, articleRequire
   if (onToolCall) onToolCall({ phase: 'thinking', step: 0 });
 
   for (let step = 0; step < MAX_STEPS; step++) {
+    const lfGen = lfTrace?.generation({ name: `openai-step-${step}`, model: 'gpt-4o-mini', input: messages });
     const response = await client.chat.completions.create({
       model: 'gpt-4o-mini',
       messages,
@@ -2442,6 +2509,10 @@ async function runAgentOpenAI(systemPrompt, userPrompt, provider, articleRequire
     });
 
     const choice = response.choices[0];
+    lfGen?.end({
+      output: choice.message,
+      usage: { input: response.usage?.prompt_tokens, output: response.usage?.completion_tokens }
+    });
 
     if (choice.finish_reason === 'tool_calls' || choice.message.tool_calls?.length > 0) {
       messages.push(choice.message);
@@ -2449,13 +2520,15 @@ async function runAgentOpenAI(systemPrompt, userPrompt, provider, articleRequire
       for (const toolCall of choice.message.tool_calls) {
         const fnName = toolCall.function.name;
         const fnArgs = JSON.parse(toolCall.function.arguments || '{}');
-        const writerIdForTool = articleRequirements._writerName?.toLowerCase() || 'default';
+        const writerIdForTool = 'default';
 
         // Notify: tool starting
         if (onToolCall) onToolCall({ phase: 'tool_start', tool: fnName, step });
 
+        const lfSpan = lfTrace?.span({ name: `tool:${fnName}`, input: fnArgs });
         const result = await executeTool(fnName, fnArgs, writerIdForTool, articleRequirements);
         const parsed = safeParseToolResult(result);
+        lfSpan?.end({ output: parsed });
         toolsUsed.push({ tool: fnName, args: fnArgs, result: parsed });
 
         // Notify: tool complete
@@ -2490,6 +2563,7 @@ async function runAgentOpenAI(systemPrompt, userPrompt, provider, articleRequire
 async function runAgentGemini(systemPrompt, userPrompt, provider, articleRequirements = {}, onToolCall = null) {
   const { GoogleGenerativeAI } = await import('@google/generative-ai');
   const genAI = new GoogleGenerativeAI(provider.apiKey);
+  const lfTrace = articleRequirements._langfuseTrace || null;
 
   const model = genAI.getGenerativeModel({
     model: 'gemini-2.0-flash',
@@ -2503,7 +2577,9 @@ async function runAgentGemini(systemPrompt, userPrompt, provider, articleRequire
 
   if (onToolCall) onToolCall({ phase: 'thinking', step: 0 });
 
+  const lfGen0 = lfTrace?.generation({ name: 'gemini-step-0', model: 'gemini-2.0-flash', input: [{ role: 'user', content: userPrompt }] });
   let response = await chat.sendMessage(userPrompt);
+  lfGen0?.end({ output: response.response.candidates?.[0]?.content });
 
   for (let step = 0; step < MAX_STEPS; step++) {
     const candidate = response.response.candidates?.[0];
@@ -2520,12 +2596,14 @@ async function runAgentGemini(systemPrompt, userPrompt, provider, articleRequire
     for (const part of functionCalls) {
       const fnName = part.functionCall.name;
       const fnArgs = part.functionCall.args || {};
-      const writerIdForTool = articleRequirements._writerName?.toLowerCase() || 'default';
+      const writerIdForTool = 'default';
 
       if (onToolCall) onToolCall({ phase: 'tool_start', tool: fnName, step });
 
+      const lfSpan = lfTrace?.span({ name: `tool:${fnName}`, input: fnArgs });
       const result = await executeTool(fnName, fnArgs, writerIdForTool, articleRequirements);
       const parsed = safeParseToolResult(result);
+      lfSpan?.end({ output: parsed });
       toolsUsed.push({ tool: fnName, args: fnArgs, result: parsed });
 
       if (onToolCall) onToolCall({ phase: 'tool_done', tool: fnName, step, result: parsed });
@@ -2540,7 +2618,9 @@ async function runAgentGemini(systemPrompt, userPrompt, provider, articleRequire
 
     if (onToolCall) onToolCall({ phase: 'thinking', step: step + 1 });
 
+    const lfGenN = lfTrace?.generation({ name: `gemini-step-${step + 1}`, model: 'gemini-2.0-flash', input: functionResponses });
     response = await chat.sendMessage(functionResponses);
+    lfGenN?.end({ output: response.response.candidates?.[0]?.content });
   }
 
   const finalText = response.response.candidates?.[0]?.content?.parts
@@ -2560,6 +2640,7 @@ const AGENT_TOOLS_CLAUDE = AGENT_TOOLS_OPENAI.map(t => ({
 async function runAgentClaude(systemPrompt, userPrompt, provider, articleRequirements = {}, onToolCall = null) {
   const { default: Anthropic } = await import('@anthropic-ai/sdk');
   const client = new Anthropic({ apiKey: provider.apiKey, timeout: 180000 });
+  const lfTrace = articleRequirements._langfuseTrace || null;
 
   const messages = [
     { role: 'user', content: userPrompt }
@@ -2571,6 +2652,7 @@ async function runAgentClaude(systemPrompt, userPrompt, provider, articleRequire
   if (onToolCall) onToolCall({ phase: 'thinking', step: 0 });
 
   for (let step = 0; step < MAX_STEPS; step++) {
+    const lfGen = lfTrace?.generation({ name: `claude-step-${step}`, model: 'claude-sonnet-4-20250514', input: messages });
     const response = await client.messages.create({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 10000,
@@ -2578,6 +2660,10 @@ async function runAgentClaude(systemPrompt, userPrompt, provider, articleRequire
       messages,
       tools: AGENT_TOOLS_CLAUDE,
       temperature: 0.4
+    });
+    lfGen?.end({
+      output: response.content,
+      usage: { input: response.usage?.input_tokens, output: response.usage?.output_tokens }
     });
 
     const toolUseBlocks = response.content.filter(b => b.type === 'tool_use');
@@ -2594,12 +2680,14 @@ async function runAgentClaude(systemPrompt, userPrompt, provider, articleRequire
     for (const toolBlock of toolUseBlocks) {
       const fnName = toolBlock.name;
       const fnArgs = toolBlock.input || {};
-      const writerIdForTool = articleRequirements._writerName?.toLowerCase() || 'default';
+      const writerIdForTool = 'default';
 
       if (onToolCall) onToolCall({ phase: 'tool_start', tool: fnName, step });
 
+      const lfSpan = lfTrace?.span({ name: `tool:${fnName}`, input: fnArgs });
       const result = await executeTool(fnName, fnArgs, writerIdForTool, articleRequirements);
       const parsed = safeParseToolResult(result);
+      lfSpan?.end({ output: parsed });
       toolsUsed.push({ tool: fnName, args: fnArgs, result: parsed });
 
       if (onToolCall) onToolCall({ phase: 'tool_done', tool: fnName, step, result: parsed });
@@ -2623,12 +2711,17 @@ async function runAgentClaude(systemPrompt, userPrompt, provider, articleRequire
   }
 
   // Max steps reached — do one final call without tools to get a summary
+  const lfFinal = lfTrace?.generation({ name: 'claude-final', model: 'claude-sonnet-4-20250514', input: messages });
   const finalResponse = await client.messages.create({
     model: 'claude-sonnet-4-20250514',
     max_tokens: 10000,
     system: systemPrompt,
     messages,
     temperature: 0.4
+  });
+  lfFinal?.end({
+    output: finalResponse.content,
+    usage: { input: finalResponse.usage?.input_tokens, output: finalResponse.usage?.output_tokens }
   });
 
   const finalText = finalResponse.content
@@ -2648,6 +2741,8 @@ async function runAgentOllama(systemPrompt, userPrompt, provider, articleRequire
     apiKey: 'ollama',
     timeout: 180000
   });
+  const lfTrace = articleRequirements._langfuseTrace || null;
+  const ollamaModel = provider.model || 'llama3.2';
 
   const messages = [
     { role: 'system', content: systemPrompt },
@@ -2659,8 +2754,9 @@ async function runAgentOllama(systemPrompt, userPrompt, provider, articleRequire
 
   try {
     for (let step = 0; step < MAX_STEPS; step++) {
+      const lfGen = lfTrace?.generation({ name: `ollama-step-${step}`, model: ollamaModel, input: messages });
       const response = await client.chat.completions.create({
-        model: provider.model || 'llama3.2',
+        model: ollamaModel,
         messages,
         tools: AGENT_TOOLS_OPENAI,
         tool_choice: 'auto',
@@ -2668,6 +2764,7 @@ async function runAgentOllama(systemPrompt, userPrompt, provider, articleRequire
       });
 
       const choice = response.choices[0];
+      lfGen?.end({ output: choice.message });
 
       if (choice.finish_reason === 'tool_calls' || choice.message.tool_calls?.length > 0) {
         messages.push(choice.message);
@@ -2675,10 +2772,12 @@ async function runAgentOllama(systemPrompt, userPrompt, provider, articleRequire
         for (const toolCall of choice.message.tool_calls) {
           const fnName = toolCall.function.name;
           const fnArgs = JSON.parse(toolCall.function.arguments || '{}');
-          const writerIdForTool = articleRequirements._writerName?.toLowerCase() || 'default';
+          const writerIdForTool = 'default';
+          const lfSpan = lfTrace?.span({ name: `tool:${fnName}`, input: fnArgs });
           const result = await executeTool(fnName, fnArgs, writerIdForTool, articleRequirements);
-
-          toolsUsed.push({ tool: fnName, args: fnArgs, result: safeParseToolResult(result) });
+          const parsed = safeParseToolResult(result);
+          lfSpan?.end({ output: parsed });
+          toolsUsed.push({ tool: fnName, args: fnArgs, result: parsed });
 
           messages.push({
             role: 'tool',
@@ -2758,34 +2857,49 @@ function logProvider(action, provider) {
 export async function runAgent(systemPrompt, userPrompt, provider, articleRequirements = {}, onToolCall = null) {
   logProvider('Agent Chat (tool-calling)', provider);
   const startTime = Date.now();
+
+  // Create a Langfuse trace for this agent turn
+  const model = provider.type === 'ollama' ? (provider.model || 'llama3.2') : PROVIDER_MODELS[provider.type];
+  const lfTrace = startTrace({
+    userId: articleRequirements._writerId,
+    sessionId: articleRequirements._sessionId,
+    topic: articleRequirements.topic,
+    writerName: articleRequirements._writerName,
+    message: userPrompt,
+    provider: provider.type,
+    model
+  });
+
+  // Inject trace into requirements so inner loops can attach generations/spans
+  const reqsWithTrace = lfTrace ? { ...articleRequirements, _langfuseTrace: lfTrace } : articleRequirements;
+
   try {
     let result;
     if (provider.type === 'openai') {
-      result = await runAgentOpenAI(systemPrompt, userPrompt, provider, articleRequirements, onToolCall);
+      result = await runAgentOpenAI(systemPrompt, userPrompt, provider, reqsWithTrace, onToolCall);
     } else if (provider.type === 'gemini') {
-      result = await runAgentGemini(systemPrompt, userPrompt, provider, articleRequirements, onToolCall);
+      result = await runAgentGemini(systemPrompt, userPrompt, provider, reqsWithTrace, onToolCall);
     } else if (provider.type === 'claude') {
-      result = await runAgentClaude(systemPrompt, userPrompt, provider, articleRequirements, onToolCall);
+      result = await runAgentClaude(systemPrompt, userPrompt, provider, reqsWithTrace, onToolCall);
     } else if (provider.type === 'ollama') {
-      result = await runAgentOllama(systemPrompt, userPrompt, provider, articleRequirements, onToolCall);
+      result = await runAgentOllama(systemPrompt, userPrompt, provider, reqsWithTrace, onToolCall);
     } else {
       throw new Error('No AI provider configured');
     }
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     const toolNames = (result.toolsUsed || []).map(t => t.tool).join(', ') || 'none';
     console.log(`✅ [AI Agent Done] ${provider.type.toUpperCase()} | ${elapsed}s | Tools used: ${toolNames}`);
+
+    lfTrace?.update({ output: result.content, metadata: { toolsUsed: toolNames, latencySeconds: parseFloat(elapsed) } });
+    await flushLangfuse();
+
     return result;
   } catch (err) {
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     console.error(`❌ [AI Agent Error] ${provider.type.toUpperCase()} | ${elapsed}s | ${err.message}`);
-    const fallback = getFallbackProvider(provider.type);
-    if (fallback) {
-      logProvider('Agent Fallback', fallback);
-      if (fallback.type === 'openai') return runAgentOpenAI(systemPrompt, userPrompt, fallback, articleRequirements);
-      if (fallback.type === 'gemini') return runAgentGemini(systemPrompt, userPrompt, fallback, articleRequirements);
-      if (fallback.type === 'claude') return runAgentClaude(systemPrompt, userPrompt, fallback, articleRequirements);
-      if (fallback.type === 'ollama') return runAgentOllama(systemPrompt, userPrompt, fallback, articleRequirements);
-    }
+    lfTrace?.update({ output: `ERROR: ${err.message}`, level: 'ERROR' });
+    await flushLangfuse();
+    // No fallback — let the error propagate so the UI shows it
     throw err;
   }
 }

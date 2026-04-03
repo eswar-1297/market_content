@@ -194,6 +194,24 @@ async function generateWithGemini(userPrompt) {
   return parseJsonFromText(text);
 }
 
+async function generateWithClaude(userPrompt) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not set');
+
+  const { default: Anthropic } = await import('@anthropic-ai/sdk');
+  const client = new Anthropic({ apiKey, timeout: 60000 });
+  const response = await client.messages.create({
+    model: 'claude-sonnet-4-20250514',
+    max_tokens: 4000,
+    system: SYSTEM_PROMPT,
+    messages: [{ role: 'user', content: userPrompt + '\n\nIMPORTANT: Return ONLY valid JSON, no markdown fences or extra text.' }],
+    temperature: 0.7
+  });
+  const text = response.content.filter(b => b.type === 'text').map(b => b.text).join('\n') || '';
+  if (!text || !text.trim()) throw new Error('Claude returned an empty response');
+  return parseJsonFromText(text);
+}
+
 function normalizeText(str) {
   return str.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
 }
@@ -300,6 +318,9 @@ export async function generateFanoutQueries(mainQuery, domain, maxFanouts = 10, 
     }
   } else if (provider === 'gemini') {
     const parsed = await generateWithGemini(userPrompt);
+    fanouts = parsed.fanouts || [];
+  } else if (provider === 'claude') {
+    const parsed = await generateWithClaude(userPrompt);
     fanouts = parsed.fanouts || [];
   } else {
     const parsed = await generateWithOpenAI(userPrompt);

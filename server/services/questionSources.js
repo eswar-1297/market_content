@@ -325,19 +325,21 @@ export async function fetchRedditQuestions(keyword) {
 
   const allPosts = new Map();
 
+  const { redditFetch } = await import('./redditAuth.js');
+
   for (let i = 0; i < searches.length; i += BATCH_SIZE) {
     const batch = searches.slice(i, i + BATCH_SIZE);
     const batchResults = await Promise.allSettled(batch.map(search => {
-      const params = {
-        q: search.query, sort: search.sort, limit: 100, type: 'link', t: 'all'
-      };
-      if (search.subreddit) params.restrict_sr = 'on';
-      return axios.get(search.url, { params, timeout: 8000, headers: { 'User-Agent': UA } });
+      const params = new URLSearchParams({
+        q: search.query, sort: search.sort, limit: '100', type: 'link', t: 'all'
+      });
+      if (search.subreddit) params.set('restrict_sr', 'on');
+      return redditFetch(`${search.url}?${params.toString()}`);
     }));
 
     for (const result of batchResults) {
       if (result.status !== 'fulfilled') continue;
-      for (const post of (result.value.data?.data?.children || [])) {
+      for (const post of (result.value?.data?.children || [])) {
         const id = post.data?.id;
         if (id && !allPosts.has(id)) allPosts.set(id, post.data);
       }

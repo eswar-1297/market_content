@@ -24,6 +24,42 @@ export default function Copilot() {
   const [metaInfo, setMetaInfo] = useState(null)
   const [aiProvider, setAiProvider] = useState(() => localStorage.getItem('ai-provider') || 'openai')
   const [sessionId, setSessionId] = useState(null)
+  const [providerStatus, setProviderStatus] = useState({ openai: true, gemini: true, claude: true })
+
+  // Persist last session ID so we can restore it if the user navigates away and returns
+  useEffect(() => {
+    if (sessionId) localStorage.setItem('copilot-last-session', sessionId)
+  }, [sessionId])
+
+  // Auto-restore the last active session on mount
+  useEffect(() => {
+    const lastId = localStorage.getItem('copilot-last-session')
+    if (!lastId) return
+    authFetch(`/api/copilot/sessions/${lastId}`)
+      .then(r => {
+        if (!r.ok) { localStorage.removeItem('copilot-last-session'); return }
+        handleLoadSession({ id: lastId })
+      })
+      .catch(() => localStorage.removeItem('copilot-last-session'))
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fetch which AI providers are configured on the server
+  useEffect(() => {
+    authFetch('/api/copilot/status')
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data) {
+          setProviderStatus({ openai: !!data.openai, gemini: !!data.gemini, claude: !!data.claude })
+          // If current selection is unavailable, switch to first available
+          const current = localStorage.getItem('ai-provider') || 'openai'
+          if (!data[current]) {
+            const first = ['openai', 'gemini', 'claude'].find(p => data[p])
+            if (first) { setAiProvider(first); localStorage.setItem('ai-provider', first) }
+          }
+        }
+      })
+      .catch(() => {})
+  }, [])
 
   const handleProviderChange = (e) => {
     const value = e.target.value
@@ -100,8 +136,12 @@ export default function Copilot() {
         authFetch(`/api/copilot/sessions/${session.id}/messages`)
       ])
 
+      if (!sessionRes.ok) {
+        localStorage.removeItem('copilot-last-session')
+        return
+      }
       const sessionData = await sessionRes.json()
-      const messagesData = await messagesRes.json()
+      const messagesData = messagesRes.ok ? await messagesRes.json() : []
 
       setSessionId(session.id)
       setTopic(sessionData.topic || '')
@@ -154,6 +194,7 @@ export default function Copilot() {
 
   const handleNewSession = async () => {
     await flushSessionContent(sessionId)
+    localStorage.removeItem('copilot-last-session')
     setSessionId(null)
     setTopic('')
     setWriterName('')
@@ -401,9 +442,9 @@ export default function Copilot() {
                 onChange={handleProviderChange}
                 className="text-xs font-medium text-gray-700 dark:text-gray-300 bg-transparent border-none outline-none cursor-pointer pr-1"
               >
-                <option value="openai">OpenAI</option>
-                <option value="gemini">Gemini</option>
-                <option value="claude">Claude</option>
+                <option value="openai">OpenAI{!providerStatus.openai ? ' ⚠' : ''}</option>
+                <option value="gemini">Gemini{!providerStatus.gemini ? ' ⚠' : ''}</option>
+                <option value="claude">Claude{!providerStatus.claude ? ' ⚠' : ''}</option>
                 <option value="ollama">Ollama</option>
               </select>
             </div>

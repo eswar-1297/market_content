@@ -9,6 +9,7 @@ import { runAgent } from '../services/agentEngine.js';
 import { refreshG2Reviews, getG2CacheStatus, bulkUpdateReviewUrls, getG2Reviews } from '../services/g2ScraperService.js';
 import { getTodayTopicForWriter } from '../services/contentCalendarService.js';
 import { checkAIDetection, checkPlagiarism, isCopyleaksConfigured, isPlagiarismConfigured } from '../services/contentCheckService.js';
+import { getLangfuse, flushLangfuse } from '../services/langfuseService.js';
 
 const router = Router();
 
@@ -44,14 +45,11 @@ function getAIProvider(req) {
   const anthropicKey = process.env.ANTHROPIC_API_KEY;
   const ollamaUrl = process.env.OLLAMA_BASE_URL;
 
-  if (provider === 'openai' && openaiKey) return { type: 'openai', apiKey: openaiKey };
-  if (provider === 'gemini' && geminiKey) return { type: 'gemini', apiKey: geminiKey };
-  if (provider === 'claude' && anthropicKey) return { type: 'claude', apiKey: anthropicKey };
-  if (provider === 'ollama' && ollamaUrl) return { type: 'ollama', baseUrl: ollamaUrl, model: process.env.OLLAMA_MODEL || 'llama3.2' };
-  if (openaiKey) return { type: 'openai', apiKey: openaiKey };
-  if (geminiKey) return { type: 'gemini', apiKey: geminiKey };
-  if (anthropicKey) return { type: 'claude', apiKey: anthropicKey };
-  if (ollamaUrl) return { type: 'ollama', baseUrl: ollamaUrl, model: process.env.OLLAMA_MODEL || 'llama3.2' };
+  // No fallback — only use the exact provider the user selected
+  if (provider === 'openai') return openaiKey ? { type: 'openai', apiKey: openaiKey } : null;
+  if (provider === 'gemini') return geminiKey ? { type: 'gemini', apiKey: geminiKey } : null;
+  if (provider === 'claude') return anthropicKey ? { type: 'claude', apiKey: anthropicKey } : null;
+  if (provider === 'ollama') return ollamaUrl ? { type: 'ollama', baseUrl: ollamaUrl, model: process.env.OLLAMA_MODEL || 'llama3.2' } : null;
   return null;
 }
 
@@ -80,6 +78,10 @@ router.post('/chat', async (req, res) => {
 
     let activeSessionId = sessionId || null;
     if (activeSessionId) {
+      const sessionExists = !!getSession(activeSessionId);
+      if (!sessionExists) activeSessionId = null;
+    }
+    if (activeSessionId) {
       saveChatMessage(activeSessionId, 'user', message.trim());
       if (currentContent) {
         updateSession(activeSessionId, { current_content: currentContent });
@@ -87,7 +89,8 @@ router.post('/chat', async (req, res) => {
     }
 
     const prompt = buildChatPrompt(message.trim(), currentContent || '', conversationHistory, writerContext, articleRequirements);
-    const agentReqs = { ...articleRequirements, _currentContent: currentContent || '', _currentHTML: currentHTML || '', _writerName: writerContext?.writerName || '', _aiProvider: aiProvider };
+    const writerId = req.user?.email || req.body.writerId || 'default';
+    const agentReqs = { ...articleRequirements, _currentContent: currentContent || '', _currentHTML: currentHTML || '', _writerName: writerContext?.writerName || '', _writerId: writerId, _sessionId: activeSessionId || undefined, _aiProvider: aiProvider };
 
     const agentResult = await runAgent(CHAT_SYSTEM_PROMPT, prompt, aiProvider, agentReqs);
 
@@ -352,8 +355,21 @@ router.get('/articles/related', (req, res) => {
 
 router.get('/sessions', (req, res) => {
   try {
-    const writerId = req.user?.email || req.query.writerId || 'default';
-    res.json(listSessions(writerId));
+    const authEmail = req.user?.email;
+    const clientWriterId = req.query.writerId || 'default';
+
+    // If auth email and client writerId differ, merge sessions from both to handle
+    // sessions created before auth was configured or under a different identifier.
+    if (authEmail && clientWriterId !== authEmail && clientWriterId !== 'default') {
+      const authSessions = listSessions(authEmail);
+      const clientSessions = listSessions(clientWriterId);
+      const seen = new Set(authSessions.map(s => s.id));
+      const merged = [...authSessions, ...clientSessions.filter(s => !seen.has(s.id))];
+      merged.sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
+      return res.json(merged);
+    }
+
+    res.json(listSessions(authEmail || clientWriterId));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -613,6 +629,26 @@ router.get('/status', (req, res) => {
     copyleaks: isCopyleaksConfigured(),
     plagiarism: isPlagiarismConfigured()
   });
+});
+
+// --- Langfuse connectivity test ---
+router.get('/test-langfuse', async (req, res) => {
+  const lf = getLangfuse();
+  if (!lf) {
+    return res.status(500).json({ ok: false, error: 'Langfuse not configured — check LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY in .env' });
+  }
+  try {
+    const trace = lf.trace({
+      name: 'connectivity-test',
+      userId: req.user?.email || 'test-user',
+      input: { message: 'Langfuse connectivity test from Content Agent' }
+    });
+    trace.update({ output: 'Connection successful' });
+    await flushLangfuse();
+    res.json({ ok: true, traceId: trace.id, message: 'Trace sent — check your Langfuse dashboard' });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
 });
 
 export default router;
