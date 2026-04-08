@@ -255,7 +255,8 @@ export default function Copilot() {
         role: data.role,
         content: data.content,
         toolSteps: data.toolSteps || [],
-        isAgent: data.isAgent || false
+        isAgent: data.isAgent || false,
+        traceId: data.traceId || null
       }])
 
       if (data.requirementsUpdate) {

@@ -213,25 +213,88 @@ export function suggestTablesAndInfographics(topic, contentType) {
     });
   }
 
-  if (suggestions.length === 0) {
+  // ═══ UNIVERSAL suggestions that apply to ALL topics ═══
+  // Always add these universal tables/infographics to ensure minimum 2-3 of each type
+
+  // Universal table: Key Takeaways Summary
+  if (!suggestions.some(s => s.type === 'summary_table')) {
     suggestions.push({
       type: 'summary_table',
-      title: 'Key Takeaways Table',
+      title: 'Key Takeaways Summary Table',
       description: 'A table summarizing the main points of the article in a scannable format. AI engines frequently extract tables for quick-answer panels.',
       placement: 'Near the "Key Takeaways" or conclusion section',
-      columns: ['Point', 'Details', 'Why It Matters']
+      columns: ['Point', 'Details', 'Why It Matters'],
+      altText: `Key takeaways summary table for ${topic}`
     });
+  }
+
+  // Universal infographic: Topic overview
+  if (!suggestions.some(s => s.type === 'infographic' && s.title.includes('Overview'))) {
     suggestions.push({
       type: 'infographic',
       title: 'Topic Overview Infographic',
       description: 'A visual overview of the topic\'s key concepts, showing relationships between ideas. Helps readers and AI engines understand the article structure at a glance.',
-      placement: 'After the introduction'
+      placement: 'After the introduction',
+      altText: `${topic} overview infographic showing key concepts and relationships`
     });
   }
+
+  // Universal: CloudFuze features comparison table
+  suggestions.push({
+    type: 'feature_table',
+    title: 'CloudFuze Feature Highlights Table',
+    description: 'A table highlighting CloudFuze features relevant to this topic — supported platforms, key capabilities, compliance certifications, and enterprise benefits.',
+    placement: 'Inside the "How CloudFuze Helps" section',
+    columns: ['Feature', 'Capability', 'Enterprise Benefit'],
+    altText: `CloudFuze features and capabilities table for ${topic}`
+  });
+
+  // Universal: Decision-making infographic
+  if (!suggestions.some(s => s.title.includes('Decision'))) {
+    suggestions.push({
+      type: 'decision_infographic',
+      title: 'Decision Framework Infographic',
+      description: 'A visual decision tree or flowchart helping IT leaders choose the right approach for this topic. Include decision points based on company size, compliance needs, and platform choices.',
+      placement: 'In the best practices or how-to section',
+      altText: `Decision framework flowchart for ${topic} showing key decision points for IT leaders`
+    });
+  }
+
+  // Ensure at least 2 tables and 2 infographics
+  const tables = suggestions.filter(s => s.type.includes('table') || s.type.includes('checklist'));
+  const infographics = suggestions.filter(s => s.type.includes('infographic') || s.type.includes('process') || s.type.includes('diagram'));
+
+  if (tables.length < 2) {
+    suggestions.push({
+      type: 'data_table',
+      title: 'Key Statistics and Data Points',
+      description: 'A table presenting important statistics, data points, and metrics related to the topic. Include source citations for each stat. AI engines extract tables with data directly.',
+      placement: 'After the first major body section',
+      columns: ['Metric', 'Value', 'Source', 'Impact'],
+      altText: `Key statistics and data points table for ${topic}`
+    });
+  }
+
+  if (infographics.length < 2) {
+    suggestions.push({
+      type: 'timeline_infographic',
+      title: 'Implementation Timeline Infographic',
+      description: 'A visual timeline showing phases, milestones, and estimated durations. Include specific timeframes and key deliverables at each phase.',
+      placement: 'Near the step-by-step or planning section',
+      altText: `Implementation timeline infographic for ${topic} showing phases and milestones`
+    });
+  }
+
+  // Separate into tables and infographics for the response
+  const finalTables = suggestions.filter(s => s.type.includes('table') || s.type.includes('checklist')).slice(0, 3);
+  const finalInfographics = suggestions.filter(s => !s.type.includes('table') && !s.type.includes('checklist')).slice(0, 3);
 
   return {
     topic,
     contentType: contentType || 'general',
-    suggestions: suggestions.slice(0, 4)
+    tableSuggestions: finalTables,
+    infographicSuggestions: finalInfographics,
+    suggestions: [...finalTables, ...finalInfographics],
+    instruction: 'Present table suggestions (2-3) and infographic suggestions (2-3) separately with clear headings. For each suggestion, include the title, description, placement recommendation, and alt-text. Suggest WHERE in the article each visual should go.'
   };
 }

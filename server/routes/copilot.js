@@ -9,7 +9,7 @@ import { runAgent } from '../services/agentEngine.js';
 import { refreshG2Reviews, getG2CacheStatus, bulkUpdateReviewUrls, getG2Reviews } from '../services/g2ScraperService.js';
 import { getTodayTopicForWriter } from '../services/contentCalendarService.js';
 import { checkAIDetection, checkPlagiarism, isCopyleaksConfigured, isPlagiarismConfigured } from '../services/contentCheckService.js';
-import { getLangfuse, flushLangfuse } from '../services/langfuseService.js';
+import { getLangfuse, flushLangfuse, recordScore } from '../services/langfuseService.js';
 
 const router = Router();
 
@@ -136,9 +136,31 @@ router.post('/chat', async (req, res) => {
       }
     }
 
-    res.json({ role: 'assistant', content, toolSteps, isAgent: true, generatedArticle, metaTitle, metaDescription, requirementsUpdate, sessionId: activeSessionId });
+    res.json({ role: 'assistant', content, toolSteps, isAgent: true, generatedArticle, metaTitle, metaDescription, requirementsUpdate, sessionId: activeSessionId, traceId: agentResult.traceId || null });
   } catch (err) {
     console.error('Agent error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ═══ FEEDBACK — thumbs up/down + comment → Langfuse score ═══
+router.post('/feedback', async (req, res) => {
+  try {
+    const { traceId, score, comment } = req.body;
+
+    if (!traceId) {
+      return res.status(400).json({ error: 'traceId is required' });
+    }
+    if (score !== 1 && score !== 0) {
+      return res.status(400).json({ error: 'score must be 1 (thumbs up) or 0 (thumbs down)' });
+    }
+
+    recordScore(traceId, score, comment || '');
+    await flushLangfuse();
+
+    res.json({ success: true, traceId, score, comment: comment || '' });
+  } catch (err) {
+    console.error('Feedback error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

@@ -63,7 +63,8 @@
       "Bash(npm install:*)",
       "Bash(node --input-type=module:*)",
       "Bash(node -e \"import\\(''langfuse''\\).then\\(m => console.log\\(''exports:'', Object.keys\\(m\\)\\)\\).catch\\(e => console.error\\(e.message\\)\\)\")",
-      "Bash(node:*)"
+      "Bash(node:*)",
+      "Bash(grep -E \"\\\\.\\(js|ts\\)$\")"
     ]
   }
 }

@@ -9,7 +9,7 @@ export function getLangfuse() {
   if (!publicKey || !secretKey) {
     return null;
   }
-  const baseUrl = process.env.LANGFUSE_HOST || 'https://cloud.langfuse.com';
+  const baseUrl = process.env.LANGFUSE_BASE_URL || process.env.LANGFUSE_HOST || 'https://us.cloud.langfuse.com';
   _client = new Langfuse({
     publicKey,
     secretKey,
@@ -45,6 +45,34 @@ export function startTrace({ userId, sessionId, topic, writerName, message, prov
   });
   console.log(`[Langfuse] Trace created — userId: ${userId || 'anonymous'} | sessionId: ${sessionId || 'n/a'} | traceId: ${trace.id}`);
   return trace;
+}
+
+/**
+ * Record user feedback (thumbs up/down + optional comment) as a Langfuse score.
+ * @param {string} traceId - The trace ID from the agent chat turn
+ * @param {number} value - 1 for thumbs up, 0 for thumbs down
+ * @param {string} comment - Optional user feedback text
+ */
+export function recordScore(traceId, value, comment = '') {
+  const lf = getLangfuse();
+  if (!lf) {
+    console.warn('[Langfuse] Cannot record score — client not configured');
+    return null;
+  }
+  if (!traceId) {
+    console.warn('[Langfuse] Cannot record score — no traceId');
+    return null;
+  }
+
+  const score = lf.score({
+    traceId,
+    name: 'user-feedback',
+    value,                       // 1 = thumbs up, 0 = thumbs down
+    comment: comment || undefined
+  });
+
+  console.log(`[Langfuse] Score recorded — traceId: ${traceId} | value: ${value} | comment: ${comment ? 'yes' : 'none'}`);
+  return score;
 }
 
 export async function flushLangfuse() {

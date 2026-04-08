@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
-import { Send, Loader2, Bot, User, Copy, Check, Tag, Layers, Search, FileText, UserCircle, Database, Wrench, CalendarDays, Youtube, Star, Table2, HelpCircle, ClipboardCheck, PenLine, Radar, Newspaper, GitFork, FileEdit, ListChecks, BookOpen, Building2 } from 'lucide-react'
+import { Send, Loader2, Bot, User, Copy, Check, Tag, Layers, Search, FileText, UserCircle, Database, Wrench, CalendarDays, Youtube, Star, Table2, HelpCircle, ClipboardCheck, PenLine, Radar, Newspaper, GitFork, FileEdit, ListChecks, BookOpen, Building2, ThumbsUp, ThumbsDown, MessageSquare, X } from 'lucide-react'
 import { useMsal } from '@azure/msal-react'
+import { authFetch } from '../../services/authFetch'
 
 const TOOL_ICONS = {
   search_past_articles: Search,
@@ -192,12 +193,66 @@ function BotBubble({ children }) {
 
 function ChatMessage({ message }) {
   const [copied, setCopied] = useState(false)
+  const [feedbackScore, setFeedbackScore] = useState(null)  // null | 1 | 0
+  const [showFeedbackInput, setShowFeedbackInput] = useState(false)
+  const [feedbackText, setFeedbackText] = useState('')
+  const [feedbackSubmitted, setFeedbackSubmitted] = useState(false)
+  const [feedbackSending, setFeedbackSending] = useState(false)
   const isBot = message.role === 'assistant'
 
   const copyText = (text) => {
     navigator.clipboard.writeText(text)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
+  }
+
+  const handleThumb = (score) => {
+    setFeedbackScore(score)
+    setShowFeedbackInput(true)
+  }
+
+  const submitFeedback = async () => {
+    if (!message.traceId) return
+    setFeedbackSending(true)
+    try {
+      await authFetch('/api/copilot/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          traceId: message.traceId,
+          score: feedbackScore,
+          comment: feedbackText.trim()
+        })
+      })
+      setFeedbackSubmitted(true)
+      setShowFeedbackInput(false)
+    } catch (err) {
+      console.error('Feedback error:', err)
+    } finally {
+      setFeedbackSending(false)
+    }
+  }
+
+  const skipFeedbackText = async () => {
+    if (!message.traceId) return
+    setFeedbackSending(true)
+    try {
+      await authFetch('/api/copilot/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          traceId: message.traceId,
+          score: feedbackScore,
+          comment: ''
+        })
+      })
+      setFeedbackSubmitted(true)
+      setShowFeedbackInput(false)
+    } catch (err) {
+      console.error('Feedback error:', err)
+    } finally {
+      setFeedbackSending(false)
+    }
   }
 
   return (
@@ -240,14 +295,97 @@ function ChatMessage({ message }) {
           <MessageText text={message.content} isBot={isBot} />
         </div>
 
+        {/* Action bar: Copy + Thumbs up/down */}
         {isBot && message.content && (
-          <button
-            onClick={() => copyText(typeof message.content === 'string' ? message.content : JSON.stringify(message.content))}
-            className="mt-1 inline-flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity"
-          >
-            {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-            {copied ? 'Copied' : 'Copy'}
-          </button>
+          <div className="mt-1 flex items-center gap-2">
+            {/* Copy button */}
+            <button
+              onClick={() => copyText(typeof message.content === 'string' ? message.content : JSON.stringify(message.content))}
+              className="inline-flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+            >
+              {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+              {copied ? 'Copied' : 'Copy'}
+            </button>
+
+            {/* Thumbs up/down — only show if traceId exists and not yet submitted */}
+            {message.traceId && !feedbackSubmitted && (
+              <div className="inline-flex items-center gap-1">
+                <button
+                  onClick={() => handleThumb(1)}
+                  className={`p-1 rounded transition-colors ${
+                    feedbackScore === 1
+                      ? 'text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/30'
+                      : 'text-gray-400 hover:text-green-600 dark:hover:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20'
+                  }`}
+                  title="Helpful response"
+                >
+                  <ThumbsUp className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={() => handleThumb(0)}
+                  className={`p-1 rounded transition-colors ${
+                    feedbackScore === 0
+                      ? 'text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/30'
+                      : 'text-gray-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20'
+                  }`}
+                  title="Not helpful"
+                >
+                  <ThumbsDown className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+
+            {/* Submitted confirmation */}
+            {feedbackSubmitted && (
+              <span className="inline-flex items-center gap-1 text-xs text-green-600 dark:text-green-400">
+                <Check className="w-3 h-3" />
+                {feedbackScore === 1 ? 'Thanks!' : 'Feedback recorded'}
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Feedback text input — shown after clicking thumbs up/down */}
+        {showFeedbackInput && !feedbackSubmitted && (
+          <div className="mt-2 p-2.5 rounded-lg bg-gray-50 dark:bg-gray-800/60 border border-gray-200 dark:border-gray-700 max-w-sm animate-fade-in">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-xs font-medium text-gray-600 dark:text-gray-400 flex items-center gap-1">
+                <MessageSquare className="w-3 h-3" />
+                {feedbackScore === 1 ? 'What was helpful?' : 'What could be better?'}
+              </span>
+              <button
+                onClick={() => { setShowFeedbackInput(false); skipFeedbackText(); }}
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                title="Skip"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+            <textarea
+              value={feedbackText}
+              onChange={(e) => setFeedbackText(e.target.value)}
+              placeholder={feedbackScore === 1 ? 'Tell us what you liked... (optional)' : 'Tell us what went wrong... (optional)'}
+              className="w-full text-xs p-2 rounded border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-200 resize-none focus:outline-none focus:ring-1 focus:ring-indigo-400"
+              rows={2}
+              autoFocus
+            />
+            <div className="flex justify-end gap-2 mt-1.5">
+              <button
+                onClick={skipFeedbackText}
+                className="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 px-2 py-1"
+              >
+                Skip
+              </button>
+              <button
+                onClick={submitFeedback}
+                disabled={feedbackSending}
+                className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1 rounded-md disabled:opacity-50 flex items-center gap-1"
+              >
+                {feedbackSending ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
+                Submit
+              </button>
+            </div>
+          </div>
         )}
       </div>
     </div>

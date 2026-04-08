@@ -392,6 +392,22 @@ export const AGENT_TOOLS_OPENAI = [
       }
     }
   }
+  ,{
+    type: 'function',
+    function: {
+      name: 'fetch_external_references',
+      description: "Fetch relevant external reference links from credible, authoritative sites for a blog topic. Returns links from official platform documentation (Microsoft Learn, Google Workspace docs), industry research (Gartner, Forrester, IDC), and authoritative sources. Use this when the writer asks for external links, reference links, credible sources, or when building a framework/article that needs authoritative citations. Also provides original information from official platform sites when the article focuses on a specific platform (e.g., SharePoint, Google Drive, OneDrive).",
+      parameters: {
+        type: 'object',
+        properties: {
+          topic: { type: 'string', description: 'The blog topic to find external references for' },
+          platforms: { type: 'array', items: { type: 'string' }, description: 'Specific platforms to find official docs for (e.g., ["Microsoft 365", "SharePoint", "Google Workspace"])' },
+          link_types: { type: 'array', items: { type: 'string', enum: ['official_docs', 'research', 'industry_reports', 'best_practices', 'compliance'] }, description: 'Types of links to prioritize. Defaults to all types.' }
+        },
+        required: ['topic']
+      }
+    }
+  }
 ];
 
 export const AGENT_TOOLS_GEMINI = AGENT_TOOLS_OPENAI.map(t => ({
@@ -726,7 +742,39 @@ export async function executeTool(toolName, args, writerId = 'default', articleR
             longTail: (keywordsData.longTailPhrases || []).slice(0, 8)
           } : null,
 
-          instruction: 'Present a comprehensive review report with ALL of the following sections. Use clear ## headings for each section so the writer can scan them independently:\n\n(1) ## CSABF SCORE + STRUCTURAL ISSUES\nOverall score, category scores, every failing check with specific fixes.\n\n(2) ## ICP ALIGNMENT\nTotal score, tier, breakdown by 5 categories with hits and specific suggestions to increase each.\n\n(3) ## GEO CITABILITY & AI VISIBILITY\nCheck each section for AI citation readiness — self-contained answer blocks, definition patterns, statistics, question-format headings, extractable lists/tables. Quote exact weak sentences and give rewritten versions.\n\n(4) ## E-E-A-T SIGNALS\nCheck for Experience (case studies, real results), Expertise (technical depth, data-backed claims), Authoritativeness (credentials, CloudFuze track record), Trustworthiness (verifiable facts). Flag what is missing and suggest specific additions.\n\n(5) ## READABILITY\nUse the readability data provided. Report on: average sentence length (target 15-20 words), passive voice rate (target <10%), sentence length variety, complex word percentage (target <15%), transition word usage (target >20%), consecutive same-length sentences. For each metric, show the current value, whether it passes/fails, and a specific fix if failing. Give an overall readability score.\n\n(6) ## GRAMMAR & TONE\nCheck for: passive voice instances (quote specific sentences and rewrite in active voice), marketing/salesy language (quote and rewrite), missing conversational tone (no you/your), filler words, hedging language, generic AI-sounding phrases. Quote exact problem sentences and provide corrected versions.\n\n(7) ## FORMATTING\nCheck: paragraph lengths (max 5 lines each — flag any long paragraphs), heading structure (1 H1, 4-10 H2s), bullet list usage (min 2), numbered list usage (min 1), subheading distribution (max 200 words between subheadings — flag gaps), whitespace/scanability. For each issue, specify the exact location and fix.\n\n(8) ## FAQ GAP ANALYSIS\nShow COVERED questions (good), then MISSING questions ranked by priority. Highlight HIGH PRIORITY ones (appearsInBoth=true). Specify WHERE in the article each missing question should go.\n\n(9) ## SEMANTIC KEYWORDS\nShow target keywords the content should include.\n\nIMPORTANT: Each section must be clearly separated with ## headings. Use checkmarks (pass) and X marks (fail) for quick scanning. Be specific — quote exact content and give actionable fixes for every issue.'
+          // ═══ MISSING SECTIONS DETECTION ═══
+          suggestedMissingSections: (() => {
+            const headingsLower = (pageData.headings || []).map(h => (h.text || h).toLowerCase());
+            const allText = (textForICP || '').toLowerCase();
+            const missing = [];
+
+            // Check for common high-value sections that should exist based on topic
+            const sectionChecks = [
+              { pattern: /pric|cost|budget|roi|total cost/i, heading: 'Pricing and Cost Considerations', reason: 'Enterprise buyers need cost/ROI information to justify purchases', condition: () => !headingsLower.some(h => /pric|cost|budget|roi/.test(h)) && (lower.includes('migrat') || lower.includes('tool') || lower.includes('solution')) },
+              { pattern: /use case|scenario|real.?world|example/i, heading: 'Real-World Use Cases', reason: 'Use cases demonstrate practical applicability and boost E-E-A-T Experience signals', condition: () => !headingsLower.some(h => /use case|scenario|real.?world/.test(h)) && !allText.includes('use case') },
+              { pattern: /secur|compliance|soc|hipaa|gdpr/i, heading: 'Security and Compliance Considerations', reason: 'Enterprise buyers prioritize security — missing compliance content loses Core ICP', condition: () => !headingsLower.some(h => /secur|compliance/.test(h)) && !allText.includes('soc 2') && !allText.includes('hipaa') },
+              { pattern: /best practice|tip|recommendation/i, heading: 'Best Practices and Recommendations', reason: 'Best practices sections are highly cited by AI search engines', condition: () => !headingsLower.some(h => /best practice|tip|recommendation/.test(h)) },
+              { pattern: /challenge|risk|pitfall|mistake|avoid/i, heading: 'Common Challenges and How to Avoid Them', reason: 'Problem-solution content matches high-intent search queries', condition: () => !headingsLower.some(h => /challenge|risk|pitfall|mistake|avoid/.test(h)) },
+              { pattern: /benefit|advantage|why/i, heading: 'Key Benefits and Advantages', reason: 'Benefits sections help AI engines understand value proposition', condition: () => !headingsLower.some(h => /benefit|advantage/.test(h)) && (lower.includes('migrat') || lower.includes('manage') || lower.includes('tool')) },
+              { pattern: /step|how to|process|guide/i, heading: 'Step-by-Step Implementation Guide', reason: 'Procedural content is extracted by Google AI Overviews as featured snippets', condition: () => !headingsLower.some(h => /step|how to|process/.test(h)) && (lower.includes('how') || lower.includes('guide') || lower.includes('migrat')) },
+              { pattern: /compare|vs|versus|differ/i, heading: 'Comparison: Key Differences', reason: 'Comparison tables are directly extracted by Perplexity and Google AIO', condition: () => !headingsLower.some(h => /compare|vs|versus|differ/.test(h)) && (lower.includes('vs') || lower.includes('compar') || lower.includes('differ')) },
+              { pattern: /cloudfuze|how .* helps/i, heading: 'How CloudFuze Helps', reason: 'Dedicated CloudFuze section is mandatory per blog standards', condition: () => !headingsLower.some(h => /cloudfuze|how .* helps/.test(h)) },
+              { pattern: /faq|frequently asked/i, heading: 'Frequently Asked Questions', reason: 'FAQ section is required by CSABF framework and boosts FAQ schema eligibility', condition: () => !headingsLower.some(h => /faq|frequently asked/.test(h)) },
+              { pattern: /key takeaway|takeaway|summary/i, heading: 'Key Takeaways', reason: 'Key Takeaways are present in 95% of CloudFuze articles and are highly cited', condition: () => !headingsLower.some(h => /key takeaway|takeaway/.test(h)) }
+            ];
+
+            for (const check of sectionChecks) {
+              try {
+                if (check.condition()) {
+                  missing.push({ heading: check.heading, reason: check.reason });
+                }
+              } catch { /* skip check on error */ }
+            }
+
+            return missing.slice(0, 6);
+          })(),
+
+          instruction: 'Present a comprehensive review report with ALL of the following sections. Use clear ## headings for each section so the writer can scan them independently:\n\n(1) ## CSABF SCORE + STRUCTURAL ISSUES\nOverall score, category scores, every failing check with specific fixes.\n\n(2) ## ICP ALIGNMENT\nTotal score, tier, breakdown by 5 categories with hits and specific suggestions to increase each.\n\n(3) ## GEO CITABILITY & AI VISIBILITY\nCheck each section for AI citation readiness — self-contained answer blocks, definition patterns, statistics, question-format headings, extractable lists/tables. Quote exact weak sentences and give rewritten versions.\n\n(4) ## E-E-A-T SIGNALS\nCheck for Experience (case studies, real results), Expertise (technical depth, data-backed claims), Authoritativeness (credentials, CloudFuze track record), Trustworthiness (verifiable facts). Flag what is missing and suggest specific additions.\n\n(5) ## READABILITY\nUse the readability data provided. Report on: average sentence length (target 15-20 words), passive voice rate (target <10%), sentence length variety, complex word percentage (target <15%), transition word usage (target >20%), consecutive same-length sentences. For each metric, show the current value, whether it passes/fails, and a specific fix if failing. Give an overall readability score.\n\n(6) ## GRAMMAR & TONE\nCheck for: passive voice instances (quote specific sentences and rewrite in active voice), marketing/salesy language (quote and rewrite), missing conversational tone (no you/your), filler words, hedging language, generic AI-sounding phrases. Quote exact problem sentences and provide corrected versions.\n\n(7) ## FORMATTING\nCheck: paragraph lengths (max 5 lines each — flag any long paragraphs), heading structure (1 H1, 4-10 H2s), bullet list usage (min 2), numbered list usage (min 1), subheading distribution (max 200 words between subheadings — flag gaps), whitespace/scanability. For each issue, specify the exact location and fix.\n\n(8) ## FAQ GAP ANALYSIS\nShow COVERED questions (good), then MISSING questions ranked by priority. Highlight HIGH PRIORITY ones (appearsInBoth=true). Specify WHERE in the article each missing question should go.\n\n(9) ## SEMANTIC KEYWORDS\nShow target keywords the content should include.\n\n(10) ## SUGGESTED MISSING SECTIONS\nBased on the topic and content analysis, suggest sections that are MISSING from the article but should be added. For each suggested section, explain WHY it should be added and WHERE it should go in the article structure. Common missing sections include: Pricing/Cost Analysis, Use Cases, Security & Compliance, Best Practices, Common Challenges, Key Benefits, Step-by-Step Guide, Comparison Table, How CloudFuze Helps, FAQs, Key Takeaways.\n\nIMPORTANT: Each section must be clearly separated with ## headings. Use checkmarks (pass) and X marks (fail) for quick scanning. Be specific — quote exact content and give actionable fixes for every issue.'
         });
       } catch (e) {
         return JSON.stringify({ error: 'Content analysis failed: ' + e.message });
@@ -1446,10 +1494,14 @@ Put 5-6 as high, 3-4 as medium. High = questions ChatGPT/Gemini would cite answe
           // SharePoint product data
           isSharePointConfigured()
             ? searchAndFetchContent(topicStr).catch(() => null)
-            : Promise.resolve(null)
+            : Promise.resolve(null),
+          // External references from credible sites
+          import('./externalReferencesService.js')
+            .then(mod => mod.fetchExternalReferences(topicStr))
+            .catch(() => null)
         ];
 
-        const [faqResult, fanoutResult, articlesResult, spResult] = await Promise.allSettled(parallelTasks);
+        const [faqResult, fanoutResult, articlesResult, spResult, extRefsResult] = await Promise.allSettled(parallelTasks);
 
         const faqData = faqResult.status === 'fulfilled' ? faqResult.value : null;
         const fanoutData = fanoutResult.status === 'fulfilled' ? fanoutResult.value : null;
@@ -1578,7 +1630,19 @@ Structure your article sections to cover these categories. This ensures your art
         }
 
         // ═══ PHASE 3: Generate framework with AI, now enriched with FAQ + fanout data ═══
-        const frameworkPrompt = `Generate a detailed GEO-optimized article framework/outline for the topic below. This framework will be inserted into the writer's editor as a starting structure. GEO = Generative Engine Optimization — structuring content so AI search engines (ChatGPT, Gemini, Perplexity, Google AI Overviews) cite and quote it.
+        const frameworkPrompt = `Generate a detailed, TOPIC-SPECIFIC GEO-optimized article framework/outline for the topic below. This framework will be inserted into the writer's editor as a starting structure. GEO = Generative Engine Optimization — structuring content so AI search engines (ChatGPT, Gemini, Perplexity, Google AI Overviews) cite and quote it.
+
+TOPIC-SPECIFIC FRAMEWORK RULES — CRITICAL:
+- The framework MUST be deeply specific to the exact topic — NOT a generic template.
+- UNDERSTAND THE CLOUDFUZE CONTEXT: Every article exists to position CloudFuze as the expert solution. Analyze how this specific topic relates to CloudFuze's products:
+  - If the topic involves migration (any source → destination): Frame around CloudFuze Migrate features (bulk transfer, permission mapping, metadata preservation, delta migration, 30+ platform support).
+  - If the topic involves SaaS management, license optimization, shadow IT, or app governance: Frame around CloudFuze Manage features (user lifecycle, compliance monitoring, cost optimization, AI app discovery).
+  - If the topic involves a specific platform (SharePoint, OneDrive, Google Drive, etc.): Include platform-specific details, limitations, and how CloudFuze bridges gaps.
+  - If the topic involves compliance (SOC 2, HIPAA, GDPR): Focus on how CloudFuze ensures compliant data handling during operations.
+  - If the topic involves M&A, tenant consolidation, or org restructuring: Focus on tenant-to-tenant migration and user mapping.
+- Each H2 section heading MUST be directly relevant to the specific topic — do NOT use generic headings like "Key Benefits" or "Best Practices" without making them topic-specific (e.g., "Key Benefits of Google Drive to SharePoint Migration for Enterprise IT Teams").
+- Include TOPIC-SPECIFIC visual suggestions (not generic). If the topic is about SharePoint migration, suggest a SharePoint permission mapping diagram, not a generic "migration flowchart."
+- Include at least ONE section that provides ORIGINAL INFORMATION from official platform documentation (e.g., Microsoft Learn, Google Workspace docs). The writing guide for this section should specify exact official docs to reference.
 
 ${ICP_FRAMEWORK}
 
@@ -1603,20 +1667,28 @@ OUTPUT FORMAT — Write the framework in clean Markdown with the following struc
 - H1: An enterprise-targeted, keyword-optimized article title (NOT the raw topic name — create a proper SEO H1)
 - A brief 1-2 sentence description under each heading explaining what to write in that section
 - Use H2 for main sections and H3 for sub-sections
-- Include these CSABF-required sections: Introduction, Key Takeaways, 4-6 body H2 sections, "How CloudFuze Helps" or "How CloudFuze Simplifies [Topic]", Frequently Asked Questions (leave this section EMPTY — just the H2 heading and a note saying "FAQs will be populated from research data below"), Conclusion
+- Include these CSABF-required sections IN THIS ORDER: Introduction, Key Takeaways, 4-6 body H2 sections, "How CloudFuze Helps" or "How CloudFuze Simplifies [Topic]" (include a soft CTA at the end of this section), Frequently Asked Questions (leave this section EMPTY — just the H2 heading and a note saying "FAQs will be populated from research data below"). FAQs are the LAST section — NO separate Conclusion after FAQs.
 - Each heading should be written as a question or action phrase that targets AI search queries
 - Under each heading, write a brief italic guide: *Write 100-150 words covering X, Y, Z...*
 - INLINE VISUAL SUGGESTIONS (MANDATORY for 3-6 sections): Right after the italic guide for a section, if that section benefits from a visual element, add a line starting with the emoji for the element type. The suggestion MUST be specific — describe exactly what to create. Do NOT create a separate visuals summary section — visuals go INLINE under the section they belong to.
 
   Format — place directly under the italic writing guide of the relevant section:
   📊 **Table:** "Cloud Migration Methods Comparison" — columns: Method | Speed | Data Loss Risk | Downtime | Best For
-  🖼 **Image:** Screenshot of CloudFuze migration dashboard showing real-time progress with file counts and ETA
-  🎨 **Infographic:** "5-Phase Enterprise Migration Timeline" — flowchart: Discovery → Planning → Pilot → Migration → Validation with durations
-  🔀 **Diagram:** Architecture diagram showing Source Cloud → Encryption Layer → CloudFuze Engine → Destination Cloud
+  🖼 **Image:** Screenshot of CloudFuze migration dashboard showing real-time progress with file counts and ETA | **Alt text:** "CloudFuze migration dashboard displaying real-time file transfer progress and estimated completion time"
+  🎨 **Infographic:** "5-Phase Enterprise Migration Timeline" — flowchart: Discovery → Planning → Pilot → Migration → Validation with durations | **Alt text:** "Enterprise cloud migration timeline infographic showing five phases from discovery to validation"
+  🔀 **Diagram:** Architecture diagram showing Source Cloud → Encryption Layer → CloudFuze Engine → Destination Cloud | **Alt text:** "CloudFuze data flow architecture diagram with encryption layer between source and destination cloud"
   📈 **Stats Highlight:** Callout box — "99.9% data fidelity · 70% faster than manual migration · 500K+ users migrated"
   ⚖️ **Comparison Chart:** Side-by-side feature matrix of migration tools with ratings
-  📸 **Screenshot:** CloudFuze user mapping interface showing source-to-destination account matching
+  📸 **Screenshot:** CloudFuze user mapping interface showing source-to-destination account matching | **Alt text:** "CloudFuze user mapping interface matching source accounts to destination accounts"
   💡 **Callout Box:** "Pro Tip: Always run a pilot migration with 5-10 users before full rollout"
+
+  ALT-TEXT RULES — MANDATORY for all 🖼 Image, 🎨 Infographic, 🔀 Diagram, and 📸 Screenshot suggestions:
+  - EVERY image, infographic, diagram, and screenshot suggestion MUST include an alt-text suggestion using the format: | **Alt text:** "descriptive text here"
+  - Alt text MUST include the primary keyword or a secondary keyword naturally
+  - Alt text should be 8-15 words, descriptive, and specific to what the image shows
+  - Use the format: "[Subject] [action/state] [context with keyword]"
+  - Example: "Enterprise Google Drive to SharePoint migration workflow diagram showing five key steps"
+  - Tables, Stats Highlights, and Callout Boxes do NOT need alt text (they are text-based elements)
 
   EXAMPLE of a complete section with inline visual:
   ## What Are the Best Enterprise Cloud Migration Methods?
@@ -1637,13 +1709,20 @@ OUTPUT FORMAT — Write the framework in clean Markdown with the following struc
 GEO OPTIMIZATION RULES FOR FRAMEWORK DESIGN:
 - Body H2s MUST read like questions someone would type into ChatGPT, Perplexity, or Google — USE the FAQ and Fanout questions provided above as your primary source for H2/H3 headings
 - Include at least ONE comparison or "vs" section if the topic involves alternatives (AI Overviews loves tables)
-- Include a "Key Takeaways" section right after intro — Perplexity and ChatGPT frequently extract bullet-point summaries
+- Include a "Key Takeaways" section right after intro — Perplexity and ChatGPT frequently extract bullet-point summaries. Each takeaway MUST be a SHORT sentence (max 15 words). Crisp, actionable, specific. No long explanations.
 - Plan for SELF-CONTAINED answer blocks under each H2 — each section should be independently quotable by AI engines (50-200 words per answer block)
 - Include placeholder for at least 1 data table or comparison chart — Google AIO and Perplexity extract tables directly
 - Plan for E-E-A-T signals: suggest where to include case studies (Experience), technical details (Expertise), CloudFuze credentials (Authority), and verifiable facts (Trust)
 - Include a "How CloudFuze Helps" section with relevant feature suggestions
 - Include a "Frequently Asked Questions" H2 section but leave it EMPTY (just write: *FAQs will be auto-populated from researched questions below.*). The system will inject real researched FAQ questions into this section after generation — do NOT write your own FAQ questions
 - Do NOT include a separate "Conclusion" H2 — CloudFuze blogs end with the CloudFuze section + FAQs + a soft CTA paragraph
+
+MANDATORY CREDIBLE STATISTIC — EVERY FRAMEWORK MUST INCLUDE:
+- You MUST include at least ONE credible, topic-relevant statistic in the introduction section guide. This stat must come from a recognized source (Gartner, Forrester, IDC, McKinsey, Statista, Microsoft, Google, or industry reports).
+- Example: *"Include stat: 'According to Gartner, 85% of enterprises will adopt a cloud-first strategy by 2026.' This boosts AI citations by 40%."*
+- The stat MUST be directly relevant to the article topic — not a generic cloud/IT stat.
+- Suggest 2-3 additional stat opportunities in body sections where data would strengthen the argument.
+- In the framework brief for each body section, suggest SPECIFIC stats or data points to include and their sources.
 
 ADDITIONAL RULES:
 - Framework should have 10-14 sections total (including H1, intro, CloudFuze section, FAQs, and closing CTA — NO separate "Conclusion" H2)
@@ -1673,7 +1752,7 @@ Output ONLY the Markdown framework + keywords section. No preamble, no commentar
           const response = await client.chat.completions.create({
             model: 'gpt-4o-mini',
             messages: [
-              { role: 'system', content: 'You are an expert content strategist. Generate article frameworks optimized for AI search engine visibility. You MUST use the provided FAQ and Fanout questions as H2/H3 headings in your framework. For 3-6 sections, you MUST add INLINE visual suggestions (📊 Table, 🖼 Image, 🎨 Infographic, 🔀 Diagram, 📈 Stats, 📸 Screenshot) directly under each section writing guide — with specific descriptions of what to create. Do NOT put visuals in a separate section.' },
+              { role: 'system', content: 'You are an expert content strategist. Generate article frameworks optimized for AI search engine visibility. You MUST use the provided FAQ and Fanout questions as H2/H3 headings in your framework. For 3-6 sections, you MUST add INLINE visual suggestions (📊 Table, 🖼 Image, 🎨 Infographic, 🔀 Diagram, 📈 Stats, 📸 Screenshot) directly under each section writing guide — with specific descriptions of what to create. EVERY Image, Infographic, Diagram, and Screenshot MUST include an alt-text suggestion with the primary keyword. Do NOT put visuals in a separate section.' },
               { role: 'user', content: frameworkPrompt }
             ],
             temperature: 0.4,
@@ -1686,7 +1765,7 @@ Output ONLY the Markdown framework + keywords section. No preamble, no commentar
           const response = await client.messages.create({
             model: 'claude-sonnet-4-20250514',
             max_tokens: 6000,
-            system: 'You are an expert content strategist. Generate article frameworks optimized for AI search engine visibility. You MUST use the provided FAQ and Fanout questions as H2/H3 headings in your framework. For 3-6 sections, you MUST add INLINE visual suggestions (📊 Table, 🖼 Image, 🎨 Infographic, 🔀 Diagram, 📈 Stats, 📸 Screenshot) directly under each section writing guide — with specific descriptions of what to create. Do NOT put visuals in a separate section.',
+            system: 'You are an expert content strategist. Generate article frameworks optimized for AI search engine visibility. You MUST use the provided FAQ and Fanout questions as H2/H3 headings in your framework. For 3-6 sections, you MUST add INLINE visual suggestions (📊 Table, 🖼 Image, 🎨 Infographic, 🔀 Diagram, 📈 Stats, 📸 Screenshot) directly under each section writing guide — with specific descriptions of what to create. EVERY Image, Infographic, Diagram, and Screenshot MUST include an alt-text suggestion with the primary keyword. Do NOT put visuals in a separate section.',
             messages: [{ role: 'user', content: frameworkPrompt }],
             temperature: 0.4
           });
@@ -1696,7 +1775,7 @@ Output ONLY the Markdown framework + keywords section. No preamble, no commentar
           const genAI = new GoogleGenerativeAI(apiKey);
           const model = genAI.getGenerativeModel({
             model: 'gemini-2.0-flash',
-            systemInstruction: 'You are an expert content strategist. Generate article frameworks optimized for AI search engine visibility. You MUST use the provided FAQ and Fanout questions as H2/H3 headings in your framework. For 3-6 sections, you MUST add INLINE visual suggestions (📊 Table, 🖼 Image, 🎨 Infographic, 🔀 Diagram, 📈 Stats, 📸 Screenshot) directly under each section writing guide — with specific descriptions of what to create. Do NOT put visuals in a separate section.',
+            systemInstruction: 'You are an expert content strategist. Generate article frameworks optimized for AI search engine visibility. You MUST use the provided FAQ and Fanout questions as H2/H3 headings in your framework. For 3-6 sections, you MUST add INLINE visual suggestions (📊 Table, 🖼 Image, 🎨 Infographic, 🔀 Diagram, 📈 Stats, 📸 Screenshot) directly under each section writing guide — with specific descriptions of what to create. EVERY Image, Infographic, Diagram, and Screenshot MUST include an alt-text suggestion with the primary keyword. Do NOT put visuals in a separate section.',
             generationConfig: { maxOutputTokens: 6000, temperature: 0.4 }
           });
           const response = await model.generateContent(frameworkPrompt);
@@ -1794,6 +1873,26 @@ Output ONLY the Markdown framework + keywords section. No preamble, no commentar
           console.log('  Framework: Could not process published articles for internal linking:', e.message);
         }
 
+        // Append external reference links (verified via live Google search)
+        try {
+          const extRefs = extRefsResult?.status === 'fulfilled' ? extRefsResult.value : null;
+          if (extRefs?.found > 0 && extRefs.allLinks?.length > 0) {
+            // Only include verified links or Google-indexed links (verified=null means Google found it but HEAD wasn't tested)
+            const goodLinks = extRefs.allLinks.filter(l => l.verified !== false);
+            if (goodLinks.length > 0) {
+              const refLines = goodLinks.slice(0, 10).map(l => {
+                const typeLabel = l.type === 'official_docs' ? '📖 Official Docs' : l.type === 'research' ? '📊 Research' : l.type === 'compliance' ? '🔒 Compliance' : l.type === 'best_practices' ? '✅ Best Practices' : '🔗 Reference';
+                const verifiedBadge = l.verified === true ? ' ✅' : '';
+                return `- ${typeLabel}: [${l.title}](${l.url}) — *${l.domain}*${verifiedBadge}`;
+              }).join('\n');
+
+              frameworkContent += '\n\n---\n\n## 🌐 External Reference Links\n\n*Real links found via live Google search. Embed these as inline citations in the article sections where their information is used — do NOT collect them in a separate "References" section. ✅ = link verified accessible.*\n\n' + refLines;
+            }
+          }
+        } catch (e) {
+          console.log('  Framework: Could not process external references:', e.message);
+        }
+
         // Count sections
         const h2Count = (frameworkContent.match(/^##\s/gm) || []).length;
         const h3Count = (frameworkContent.match(/^###\s/gm) || []).length;
@@ -1807,7 +1906,7 @@ Output ONLY the Markdown framework + keywords section. No preamble, no commentar
           totalQuestionsResearched: allFaqItems.length,
           questionsUsedAsHeadings: allFaqItems.length - missingFaqs.length,
           article: frameworkContent,
-          instruction: 'The framework has been inserted into the editor. The H2/H3 headings were derived from real FAQ and AI fanout research. Briefly summarize: (1) structure overview — number of sections and that headings are based on real search demand + AI engine decomposition, (2) how many FAQ/fanout questions were researched and how many were used as headings vs listed as suggested FAQs, (3) semantic keywords included, (4) internal linking articles found. Ask the writer if they want to modify the framework, swap any headings, select specific FAQs, or proceed with article generation.'
+          instruction: 'The framework has been inserted into the editor. The H2/H3 headings were derived from real FAQ and AI fanout research. Briefly summarize: (1) structure overview — number of sections and that headings are based on real search demand + AI engine decomposition, (2) how many FAQ/fanout questions were researched and how many were used as headings vs listed as suggested FAQs, (3) semantic keywords included, (4) internal linking articles found, (5) external reference links from credible sources included. Ask the writer if they want to modify the framework, swap any headings, select specific FAQs, or proceed with article generation.'
         });
       } catch (e) {
         return JSON.stringify({ error: `Framework generation failed: ${e.message}` });
@@ -2165,6 +2264,22 @@ RULES:
       }
     }
 
+    case 'fetch_external_references': {
+      const topicStr = (args.topic || '').toString().trim();
+      if (!topicStr) return JSON.stringify({ error: 'Topic is required.' });
+
+      const platforms = Array.isArray(args.platforms) ? args.platforms : [];
+      const linkTypes = Array.isArray(args.link_types) ? args.link_types : ['official_docs', 'research', 'industry_reports', 'best_practices', 'compliance'];
+
+      try {
+        const { fetchExternalReferences } = await import('./externalReferencesService.js');
+        const result = await fetchExternalReferences(topicStr, platforms, linkTypes);
+        return JSON.stringify(result);
+      } catch (e) {
+        return JSON.stringify({ error: `External references fetch failed: ${e.message}` });
+      }
+    }
+
     default:
       return JSON.stringify({ error: `Unknown tool: ${toolName}` });
   }
@@ -2188,12 +2303,17 @@ STRUCTURE:
   - Include specific platform names (Microsoft 365, Google Workspace, SharePoint, OneDrive) where relevant
   - Use patterns like "Enterprise [Topic]: [Benefit] for IT Leaders" or "[Platform] [Topic]: Complete Guide for 2026"
   - Do NOT use the raw topic as the H1. Do NOT include "CloudFuze" in the H1 unless the topic is specifically about CloudFuze.
-- Include a "Key Takeaways" section immediately after the introduction as a bullet list (5-7 takeaways)
+- Include a "Key Takeaways" section immediately after the introduction as a bullet list (5-7 takeaways). EACH takeaway MUST be a SHORT sentence — max 15 words per bullet point. Use crisp, actionable language. NO long explanations. Examples of good takeaways:
+  - "Enterprise cloud migration requires careful permission mapping to avoid data loss."
+  - "CloudFuze supports bulk migration for 10,000+ users with full metadata preservation."
+  - "SOC 2 and HIPAA compliance are non-negotiable for enterprise migration projects."
+  Bad: "When organizations are planning to migrate their data from one cloud platform to another, they should consider the importance of preserving permissions and metadata throughout the entire migration process." (Too long — rewrite as a short sentence.)
 - Use 4-6 H2 sections for the article body covering the topic's main aspects. These body H2s should be ORIGINAL headings you create — NOT the FAQ questions. Body H2s cover the topic broadly; FAQs go in their own dedicated section (see FAQ SECTION rules below).
 - Use H3 sub-sections where appropriate for detailed breakdowns
-- Include a "Frequently Asked Questions" H2 section NEAR THE END (before Conclusion). Inside this section, each FAQ is formatted as an H3 question with its answer below it. ONLY use the FAQs provided in the prompt. If the prompt says 4 FAQs, write exactly 4. Do NOT add extra FAQs.
-- Include a "How CloudFuze Helps" or "How CloudFuze Simplifies [Topic]" H2 section — this is a standalone section in the second half of the article (after body H2s, before FAQs). This section highlights CloudFuze features specifically relevant to the article's topic. It doubles as the article's closing section.
-- End with a soft CTA paragraph after the FAQ section (NOT a separate "Conclusion" H2 — CloudFuze articles do NOT use a separate Conclusion heading per blog standards). The CTA should mention CloudFuze with a specific next step (e.g., "Start a free migration assessment with CloudFuze" or "Schedule a demo to see how CloudFuze simplifies [topic]").
+- Include a "How CloudFuze Helps" or "How CloudFuze Simplifies [Topic]" H2 section — this is a standalone section in the second half of the article (after body H2s, before FAQs). This section highlights CloudFuze features specifically relevant to the article's topic. End this section with a soft CTA paragraph.
+- ARTICLE STRUCTURE ORDER (bottom half): ... → Body H2s → "How CloudFuze Helps" (with CTA at end) → "Frequently Asked Questions" (LAST section in the article).
+- Include a "Frequently Asked Questions" H2 section as the FINAL section of the article. Inside this section, each FAQ is formatted as an H3 question with its answer below it. ONLY use the FAQs provided in the prompt. If the prompt says 4 FAQs, write exactly 4. Do NOT add extra FAQs. FAQs are the LAST thing in the article — nothing comes after them.
+- Include a soft CTA paragraph BEFORE the FAQ section (NOT after FAQs). The CTA should come at the end of the "How CloudFuze Helps" section or as a standalone short paragraph right before "## Frequently Asked Questions". The CTA should mention CloudFuze with a specific next step (e.g., "Start a free migration assessment with CloudFuze" or "Schedule a demo to see how CloudFuze simplifies [topic]"). Do NOT add a separate "Conclusion" H2 — CloudFuze articles do NOT use a separate Conclusion heading per blog standards.
 - FAQ PLACEMENT: By default, ALL FAQ questions go inside the "Frequently Asked Questions" section as H3s. However, if a FAQ question adds significant value as a standalone body section (e.g., "How do I migrate from X to Y?" is central to the article topic), you may promote UP TO 2 FAQs as H2 body sections — but ONLY if they genuinely deserve deeper coverage. The remaining FAQs MUST stay in the FAQ section. NEVER use ALL FAQs as H2 body headings. If the writer explicitly asks to use a specific FAQ as an H2, always follow that instruction.
 
 INTRODUCTION (first 100-150 words) — THIS IS THE MOST CITED SECTION:
@@ -2215,11 +2335,14 @@ ANSWER BLOCK QUALITY (most important for citations):
 - Use definition patterns: "[Term] is..." or "What is [Term]? [Term] is..." — these increase AI citations by 2.1x
 - Use "inverted pyramid" format: answer first, then context, then details
 
-STATISTICAL DENSITY (boosts citations by 40%):
+STATISTICAL DENSITY (boosts citations by 40%) — MANDATORY:
+- EVERY article MUST include at least ONE credible, topic-relevant statistic from a recognized source (Gartner, Forrester, IDC, McKinsey, Statista, Microsoft, Google) in the INTRODUCTION. This is non-negotiable.
+- Include at least 3-5 total statistics throughout the article, spread across different sections.
 - Include specific percentages, dollar amounts, timeframes, and named sources
 - Replace vague claims with data: NOT "significantly reduces time" → YES "reduces migration time by 60%"
 - NOT "many businesses use" → YES "over 85% of Fortune 500 companies"
-- Cite sources where possible: "According to Gartner...", "Based on CloudFuze's migration of 20M+ users..."
+- Cite sources inline: "According to Gartner...", "Based on CloudFuze's migration of 20M+ users...", "A Forrester study found..."
+- Stats MUST be relevant to the specific article topic — not generic IT/cloud stats.
 
 STRUCTURAL READABILITY:
 - Use bullet lists and numbered lists extensively — AI engines extract these far more easily than paragraphs
@@ -2248,11 +2371,21 @@ CONTENT ORIGINALITY — CRITICAL:
 - For statistics, data points, and industry facts — use publicly available research (Gartner, Forrester, IDC, Microsoft docs, Google docs) and cite them inline.
 - Each article must bring a FRESH perspective, new angles, and original analysis — even if the topic overlaps with past articles.
 
+ACTIVE VOICE — MANDATORY THROUGHOUT:
+- EVERY sentence in the article MUST use active voice. Passive voice is NEVER acceptable.
+- Before outputting any sentence, verify it uses active voice (subject + verb + object).
+- Passive: "Files are migrated by CloudFuze." → Active: "CloudFuze migrates files."
+- Passive: "Permissions can be preserved during migration." → Active: "CloudFuze preserves permissions during migration."
+- Passive: "The migration process is completed in 48 hours." → Active: "The migration process completes in 48 hours."
+- Passive: "Data security is ensured through encryption." → Active: "End-to-end encryption ensures data security."
+- If you write a passive sentence, immediately rewrite it in active voice before including it.
+
 AVOID:
 - NEVER use marketing fluff, salesy language, or vague filler
 - Write with authority — no hedging ("might", "could potentially", "it seems")
 - No generic AI-sounding phrases ("In today's rapidly evolving landscape", "It's important to note that")
 - No filler sentences that add no information
+- NEVER use passive voice — active voice in every sentence
 
 COMPETITOR POLICY — CRITICAL:
 - NEVER mention competitor products or tools by name. Do NOT list alternatives like MultCloud, Mover.io, Zapier, Insync, Movebot, CloudHQ, odrive, or any other migration/cloud tool.
@@ -2269,7 +2402,7 @@ WHERE to mention CloudFuze (aim for 8-12 mentions across the article):
 2. BODY SECTIONS: In every section where migration, data transfer, integration, cloud management, or any operational challenge is discussed, naturally reference how CloudFuze addresses it. Example: "CloudFuze handles this with automated permission mapping and metadata preservation."
 3. HOW-TO / STEP-BY-STEP SECTIONS: When listing steps for migration or setup, include CloudFuze as the recommended tool in the relevant step. Example: "Step 3: Use CloudFuze to initiate the bulk transfer with a single click."
 4. "HOW CLOUDFUZE HELPS" SECTION: Include a dedicated H2 or H3 section (can be standalone or embedded in the Conclusion) that specifically highlights CloudFuze's relevant features for the article's topic. This should feel like a natural recommendation, not an ad.
-5. CLOSING CTA: After the FAQ section, include a short closing paragraph (NOT a separate "Conclusion" H2) with CloudFuze as the recommended next step. Include a soft CTA like "CloudFuze simplifies [topic] with [specific feature]. Get started with a free migration assessment."
+5. CLOSING CTA: Include a soft CTA paragraph at the END of the "How CloudFuze Helps" section, BEFORE the FAQ section. NOT after FAQs. The CTA should naturally close the CloudFuze section with a specific next step like "CloudFuze simplifies [topic] with [specific feature]. Get started with a free migration assessment." or "Schedule a demo to see how CloudFuze handles [topic] at enterprise scale."
 6. FAQ ANSWERS: Where relevant, reference CloudFuze in 1-2 FAQ answers. Example: "How do I migrate from X to Y? CloudFuze automates the entire process, preserving permissions, metadata, and folder structures."
 
 HOW to mention CloudFuze (tone and style):
@@ -2305,14 +2438,47 @@ KEYWORD INTEGRATION — GEO-OPTIMIZED:
 
 TONE & STYLE:
 - Professional, authoritative, direct
-- Active voice (not passive)
+- Active voice ALWAYS — NEVER use passive voice. Every sentence must use active voice construction.
 - Specific over general (say "reduces migration time by 60%" not "significantly reduces time")
 - No exclamation marks, no rhetorical questions in body text
 - Short sentences preferred
 
+BUYER PERSONA TONE SHIFTING — CRITICAL:
+Adjust writing tone, vocabulary, and focus based on the target audience persona:
+
+**CIO / VP of IT (Strategic Buyer):**
+- Focus on: ROI, business outcomes, risk mitigation, strategic alignment, board-level justification
+- Vocabulary: "digital transformation", "strategic initiative", "operational efficiency", "total cost of ownership", "risk posture"
+- Tone: Executive summary style, high-level insights, business impact over technical details
+- Content emphasis: Cost savings, compliance risk reduction, competitive advantage, vendor consolidation
+- Example framing: "For CIOs evaluating cloud migration strategies, the key consideration is minimizing operational disruption while maintaining compliance across all data sovereignty requirements."
+
+**CTO (Technical Decision-Maker):**
+- Focus on: Architecture, scalability, API integrations, security protocols, technical feasibility
+- Vocabulary: "API-driven", "zero-trust architecture", "horizontal scaling", "data pipeline", "encryption at rest and in transit"
+- Tone: Technical depth, architecture-level thinking, engineering best practices
+- Content emphasis: Technical specifications, integration points, performance benchmarks, security architecture
+- Example framing: "CTOs architecting a multi-cloud migration should evaluate API throughput, OAuth 2.0 token handling, and data pipeline resilience across hybrid environments."
+
+**IT Director / IT Manager (Operational Buyer):**
+- Focus on: Implementation details, team workflows, timeline, resource planning, change management
+- Vocabulary: "rollout plan", "user adoption", "change management", "pilot phase", "cutover window"
+- Tone: Practical, step-by-step, project management oriented
+- Content emphasis: Migration planning, team coordination, training needs, timeline estimates
+- Example framing: "IT Directors planning a tenant-to-tenant migration should allocate 2-4 weeks for pilot testing with a subset of 50-100 users before full rollout."
+
+**IT Admin / System Administrator (Hands-On User):**
+- Focus on: Step-by-step procedures, configuration settings, troubleshooting, admin console tasks
+- Vocabulary: "admin console", "PowerShell script", "permission mapping", "sync settings", "audit log"
+- Tone: Tutorial-style, precise instructions, command-level detail
+- Content emphasis: How-to guides, configuration steps, common errors and fixes, tool walkthroughs
+- Example framing: "IT admins can initiate the migration from the CloudFuze admin console by selecting the source and destination tenants, mapping user accounts, and configuring permission inheritance settings."
+
+When generating content, detect the target audience from the topic, framework, or writer's instructions and apply the matching persona tone throughout the article. If no specific persona is indicated, default to IT Director/IT Manager tone (practical, actionable) with CIO-level insights in the introduction and conclusion.
+
 FAQ SECTION — PLACEMENT AND FORMAT:
 - The FAQ section is a single H2 heading: "## Frequently Asked Questions"
-- It appears NEAR THE END of the article, just before the Conclusion
+- It appears as the LAST section of the article — AFTER the "How CloudFuze Helps" section and its CTA. Nothing comes after FAQs.
 - Inside this section, each FAQ is an H3: "### Question here?\\n\\nAnswer here."
 - Each answer: 2-4 sentences. Start with the direct answer, then explain
 - FAQ answers must be self-contained — quotable by AI without surrounding context
@@ -2343,14 +2509,15 @@ Meta Title rules (for SEO + AI visibility):
 - Must be unique and descriptive — not generic or clickbaity
 
 Meta Description rules (for SEO + AI visibility):
-- 150-160 characters max (Google truncates after ~160)
-- Primary keyword in the first 20 words
+- STRICT MAX 140 characters — NEVER exceed 140 characters. Count carefully before outputting.
+- Primary keyword MUST appear in the first 10 words
 - Must contain a clear value proposition — what will the reader learn/get?
 - Include a secondary keyword naturally if possible
 - Use active voice, direct language
 - End with a subtle CTA or promise (e.g. "Learn the step-by-step process.", "See the complete guide.")
 - AI engines (Perplexity, ChatGPT, Gemini) often use meta descriptions as source summaries — make it self-contained and factual
 - Do NOT use fluff like "In this article we will..." or "Read on to discover..."
+- ALWAYS show the character count in parentheses after the meta description, e.g. "(132 chars)"
 
 INLINE SOURCES — MANDATORY (placed UNDER each section, NOT at the end):
 Writers need to verify every claim before publishing. Sources MUST appear directly below the section that uses them — NOT collected at the end of the article.
@@ -2892,6 +3059,11 @@ export async function runAgent(systemPrompt, userPrompt, provider, articleRequir
 
     lfTrace?.update({ output: result.content, metadata: { toolsUsed: toolNames, latencySeconds: parseFloat(elapsed) } });
     await flushLangfuse();
+
+    // Attach traceId so the API route can return it to the client for feedback
+    if (lfTrace) {
+      result.traceId = lfTrace.id;
+    }
 
     return result;
   } catch (err) {
