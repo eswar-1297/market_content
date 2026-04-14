@@ -32,15 +32,32 @@ export default function Copilot() {
   }, [sessionId])
 
   // Auto-restore the last active session on mount
+  // Retries on 401 because MSAL token may not be ready immediately after page load
   useEffect(() => {
     const lastId = localStorage.getItem('copilot-last-session')
     if (!lastId) return
-    authFetch(`/api/copilot/sessions/${lastId}`)
-      .then(r => {
-        if (!r.ok) { localStorage.removeItem('copilot-last-session'); return }
-        handleLoadSession({ id: lastId })
-      })
-      .catch(() => localStorage.removeItem('copilot-last-session'))
+
+    const tryRestore = (attempt = 1) => {
+      authFetch(`/api/copilot/sessions/${lastId}`)
+        .then(r => {
+          if (r.ok) {
+            handleLoadSession({ id: lastId })
+          } else if (r.status === 401 && attempt <= 3) {
+            // Token not ready yet — retry after delay (MSAL still initializing)
+            setTimeout(() => tryRestore(attempt + 1), 1000 * attempt)
+          } else {
+            localStorage.removeItem('copilot-last-session')
+          }
+        })
+        .catch(() => {
+          if (attempt <= 3) {
+            setTimeout(() => tryRestore(attempt + 1), 1000 * attempt)
+          } else {
+            localStorage.removeItem('copilot-last-session')
+          }
+        })
+    }
+    tryRestore()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch which AI providers are configured on the server

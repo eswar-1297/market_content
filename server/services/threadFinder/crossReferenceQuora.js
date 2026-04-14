@@ -135,27 +135,25 @@ export async function crossReferenceQuoraSearch(query, options = {}) {
     console.log('\n🔧 Step 5: Processing Results')
     const { questions, stats } = processSearchResults(bingResults, googleResults, query)
     
-    // Step 6: Check answers for CloudFuze mentions
-    console.log('\n🔍 Step 6: Checking Quora answers for CloudFuze mentions...')
+    // Step 6: Skip answer checking — it causes timeouts scraping Quora pages
+    // CloudFuze mentions in answers don't reduce thread value for content research
+    console.log('\n✅ Step 6: Skipping answer checking (speed optimization)')
     let filteredQuestions = questions
-    
-    if (questions.length > 0) {
+
+    if (false && questions.length > 0) {
       try {
-        // Check answers in batches (limit to first 30 questions to avoid rate limiting)
         const urlsToCheck = questions.slice(0, 30).map(q => q.url).filter(Boolean)
         console.log(`   Checking ${urlsToCheck.length} questions for answer mentions...`)
-        
+
         const answerCheckResults = await batchCheckQuoraAnswers(urlsToCheck, 3)
-        
+
         const questionsWithBrandInAnswers = Array.from(answerCheckResults.values())
           .filter(r => r.hasBrandMention).length
         console.log(`   Found ${questionsWithBrandInAnswers} questions with CloudFuze in answers`)
-        
-        // Filter out questions with CloudFuze in answers
+
         const beforeFilter = questions.length
         filteredQuestions = questions.filter(q => {
           const checkResult = answerCheckResults.get(q.url)
-          // Keep if: no check result OR check failed OR no brand mention
           return !checkResult || !checkResult.checked || !checkResult.hasBrandMention
         })
         console.log(`   After filtering: ${filteredQuestions.length} (removed ${beforeFilter - filteredQuestions.length})`)

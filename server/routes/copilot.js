@@ -82,6 +82,25 @@ router.post('/chat', async (req, res) => {
       const sessionExists = !!getSession(activeSessionId);
       if (!sessionExists) activeSessionId = null;
     }
+
+    // Auto-create a session if none exists — messages should NEVER be lost
+    if (!activeSessionId) {
+      try {
+        const writerId = req.user?.email || req.body.writerId || 'default';
+        const writerName = req.user?.name || '';
+        if (writerId !== 'default') {
+          createWriter(writerId, writerName || writerId.split('@')[0] || writerId, writerId);
+        }
+        const id = randomUUID();
+        const topicText = (writerContext?.topic || message.trim().substring(0, 80) || 'Chat Session').replace(/\n/g, ' ');
+        createSession({ id, writer_id: writerId, topic: topicText, content_type: '', framework: [], semantic_keywords: {}, current_content: '' });
+        activeSessionId = id;
+        console.log(`[Chat] Auto-created session ${id} for writer ${writerId}`);
+      } catch (e) {
+        console.warn('[Chat] Failed to auto-create session:', e.message);
+      }
+    }
+
     if (activeSessionId) {
       saveChatMessage(activeSessionId, 'user', message.trim());
       if (currentContent) {
@@ -434,19 +453,28 @@ router.get('/sessions', (req, res) => {
   try {
     const authEmail = req.user?.email;
     const clientWriterId = req.query.writerId || 'default';
+    const primaryId = authEmail || clientWriterId;
 
-    // If auth email and client writerId differ, merge sessions from both to handle
-    // sessions created before auth was configured or under a different identifier.
-    if (authEmail && clientWriterId !== authEmail && clientWriterId !== 'default') {
-      const authSessions = listSessions(authEmail);
-      const clientSessions = listSessions(clientWriterId);
-      const seen = new Set(authSessions.map(s => s.id));
-      const merged = [...authSessions, ...clientSessions.filter(s => !seen.has(s.id))];
-      merged.sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
-      return res.json(merged);
+    // Always merge sessions from the primary writer ID + 'default' to catch sessions
+    // created before auth was configured or during token initialization race conditions.
+    const primarySessions = listSessions(primaryId);
+    const seen = new Set(primarySessions.map(s => s.id));
+
+    // Also fetch 'default' sessions and client-sent writerId sessions (if different)
+    const extraIds = new Set(['default']);
+    if (clientWriterId && clientWriterId !== primaryId) extraIds.add(clientWriterId);
+    extraIds.delete(primaryId); // Don't re-fetch primary
+
+    let merged = [...primarySessions];
+    for (const extraId of extraIds) {
+      const extra = listSessions(extraId);
+      for (const s of extra) {
+        if (!seen.has(s.id)) { merged.push(s); seen.add(s.id); }
+      }
     }
 
-    res.json(listSessions(authEmail || clientWriterId));
+    merged.sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
+    res.json(merged);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

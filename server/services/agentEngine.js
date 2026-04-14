@@ -1104,7 +1104,7 @@ Put 5-6 as high, 3-4 as medium. High = questions ChatGPT/Gemini would cite answe
         tasks.push(
           crossReferenceQuoraSearch(query, { limit: 25, useBing: true, useGoogle: true, useCache: true })
             .then(data => {
-              const list = Array.isArray(data) ? data : (data.threads || data.results || []);
+              const list = Array.isArray(data) ? data : (data.questions || data.threads || data.results || []);
               const threads = list.slice(0, 20).map(t => ({
                 title: t.title || t.question || '',
                 url: t.url || t.link || '',

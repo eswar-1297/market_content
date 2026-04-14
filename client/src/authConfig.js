@@ -22,10 +22,20 @@ export const loginRequest = {
 }
 
 /**
- * Silently acquire an access token for the logged-in user.
+ * Silently acquire a token for the logged-in user.
+ * Returns the idToken (validated by server auth middleware against clientId audience).
  * Falls back to interactive redirect if the silent call fails.
+ * Returns null if no user is logged in (auth not configured or MSAL not ready).
  */
 export async function getAccessToken() {
+  try {
+    // Wait for MSAL to finish any in-progress redirects before checking accounts
+    await msalInstance.initialize().catch(() => {})
+    await msalInstance.handleRedirectPromise().catch(() => {})
+  } catch {
+    // Ignore — MSAL may already be initialized
+  }
+
   const accounts = msalInstance.getAllAccounts()
   if (accounts.length === 0) return null
 
@@ -36,7 +46,11 @@ export async function getAccessToken() {
     })
     return response.idToken
   } catch {
-    await msalInstance.acquireTokenRedirect(loginRequest)
+    try {
+      await msalInstance.acquireTokenRedirect(loginRequest)
+    } catch {
+      // Redirect failed — return null and let the caller handle
+    }
     return null
   }
 }

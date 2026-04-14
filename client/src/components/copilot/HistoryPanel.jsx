@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { History, X, Trash2, MessageSquare, FileText, Clock, ChevronRight, ChevronLeft, Loader2, Layers, ArrowUpRight } from 'lucide-react'
 import { authFetch } from '../../services/authFetch'
 
-export default function HistoryPanel({ onClose, onLoadSession, onLoadSnapshot, currentSessionId }) {
+export default function HistoryPanel({ onClose, onLoadSession, onLoadSnapshot, currentSessionId, userId = 'default' }) {
   const [sessions, setSessions] = useState([])
   const [loading, setLoading] = useState(true)
   const [deletingId, setDeletingId] = useState(null)
@@ -19,7 +19,7 @@ export default function HistoryPanel({ onClose, onLoadSession, onLoadSnapshot, c
   const fetchSessions = async () => {
     setLoading(true)
     try {
-      const res = await authFetch('/api/copilot/sessions?writerId=default')
+      const res = await authFetch(`/api/copilot/sessions?writerId=${encodeURIComponent(userId)}`)
       if (res.ok) setSessions(await res.json())
     } catch (err) {
       console.error('Failed to load sessions:', err)
