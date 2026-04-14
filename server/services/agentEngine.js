@@ -18,6 +18,35 @@ import { formatBlogPatternsForPrompt, formatWriterPatternsForPrompt } from '../c
 import { htmlToMarkdown } from '../utils/contentParser.js';
 import { ICP_FRAMEWORK } from '../utils/copilotPrompts.js';
 import { startTrace, flushLangfuse } from './langfuseService.js';
+import { getLearnedRulesPrompt, addLearnedRule } from './feedbackLearningService.js';
+
+// ═══ CLAUDE — COMMON MODEL FOR ALL INTERNAL TOOL WORK ═══
+// The user-selected model (OpenAI/Gemini/Ollama) is used for the agent loop (chat + tool calling).
+// Claude is ALWAYS used for internal content generation after tool calling:
+//   - generate_framework, generate_article, edit_article
+//   - FAQ generation fallback
+//   - Service calls (faqService, fanoutService)
+// This ensures consistent, high-quality output regardless of the chat model.
+
+async function callClaude(systemPrompt, userPrompt, { maxTokens = 6000, temperature = 0.4, timeout = 120000 } = {}) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error('ANTHROPIC_API_KEY not configured. Claude is required for content generation.');
+  const { default: Anthropic } = await import('@anthropic-ai/sdk');
+  const client = new Anthropic({ apiKey, timeout });
+  const response = await client.messages.create({
+    model: 'claude-sonnet-4-20250514',
+    max_tokens: maxTokens,
+    system: systemPrompt,
+    messages: [{ role: 'user', content: userPrompt }],
+    temperature
+  });
+  return response.content.filter(b => b.type === 'text').map(b => b.text).join('\n') || '';
+}
+
+// Helper to get Claude provider info for service calls (faqService, fanoutService)
+function getClaudeProvider() {
+  return { type: 'claude', apiKey: process.env.ANTHROPIC_API_KEY };
+}
 
 // ═══ RESEARCH CACHE (10 min TTL) — avoids re-running FAQ+Fanout for same topic ═══
 const researchCache = new Map();
@@ -441,8 +470,8 @@ export async function executeTool(toolName, args, writerId = 'default', articleR
       if (rawContent.length < 20) return JSON.stringify({ error: 'Content too short to analyze.' });
 
       try {
-        const provider = articleRequirements._aiProvider?.type || 'openai';
-        const apiKey = articleRequirements._aiProvider?.apiKey || (provider === 'openai' ? process.env.OPENAI_API_KEY : provider === 'gemini' ? process.env.GEMINI_API_KEY : provider === 'claude' ? process.env.ANTHROPIC_API_KEY : null);
+        // Always use Claude for internal analysis work
+        const claudeKey = process.env.ANTHROPIC_API_KEY;
 
         const isURL = /^https?:\/\/[^\s]+$/i.test(rawContent);
         let csabfInput = rawContent;
@@ -507,21 +536,21 @@ export async function executeTool(toolName, args, writerId = 'default', articleR
 
         const topicStr = pageData.h1 || pageData.title || 'content';
 
-        // ═══ STEP 2: Run CSABF + ICP + FAQ + Fanout + Keywords in parallel ═══
+        // ═══ STEP 2: Run CSABF + ICP + FAQ + Fanout + Keywords in parallel (always Claude) ═══
         const cachedAnalysis = getCachedResearch(topicStr);
         const [csabfResult, discoverResult, fanoutResult, keywordsResult] = await Promise.allSettled([
           Promise.resolve(analyzeContent(csabfInput, csabfMode)),
           cachedAnalysis?.faqData
             ? Promise.resolve(cachedAnalysis.faqData)
-            : (apiKey ? discoverQuestions(pageData, provider, apiKey).then(async (discovery) => {
+            : (claudeKey ? discoverQuestions(pageData, 'claude', claudeKey).then(async (discovery) => {
                 const gaps = analyzeGaps(discovery.questions || [], pageData.existingFAQs || []);
-                const prioritized = await prioritizeQuestions(gaps.gaps || [], pageData, provider, apiKey);
+                const prioritized = await prioritizeQuestions(gaps.gaps || [], pageData, 'claude', claudeKey);
                 return { discovery, gaps, prioritized };
               }) : Promise.resolve(null)),
           cachedAnalysis?.fanoutData
             ? Promise.resolve(cachedAnalysis.fanoutData)
-            : (apiKey ? generateFanoutQueries(topicStr, '', 12, provider) : Promise.resolve(null)),
-          apiKey ? generateSemanticKeywords(pageData, provider, apiKey) : Promise.resolve(null)
+            : (claudeKey ? generateFanoutQueries(topicStr, '', 12, 'claude') : Promise.resolve(null)),
+          claudeKey ? generateSemanticKeywords(pageData, 'claude', claudeKey) : Promise.resolve(null)
         ]);
 
         // Cache FAQ + fanout results
@@ -890,20 +919,20 @@ export async function executeTool(toolName, args, writerId = 'default', articleR
       const topicStr = (args.topic || '').toString().trim();
       if (!topicStr) return JSON.stringify({ error: 'Topic is required.' });
       try {
-        const provider = articleRequirements._aiProvider?.type || 'openai';
-        const apiKey = articleRequirements._aiProvider?.apiKey || (provider === 'openai' ? process.env.OPENAI_API_KEY : provider === 'gemini' ? process.env.GEMINI_API_KEY : provider === 'claude' ? process.env.ANTHROPIC_API_KEY : null);
-        if (!apiKey) return JSON.stringify({ error: 'No AI API key configured.' });
+        // Always use Claude for internal FAQ/keyword generation
+        const claudeKey = process.env.ANTHROPIC_API_KEY;
+        if (!claudeKey) return JSON.stringify({ error: 'ANTHROPIC_API_KEY not configured. Claude is required for content generation.' });
 
         const pageData = { url: null, title: topicStr, h1: topicStr, headings: [], paragraphs: [], existingFAQs: [], wordCount: 0, existingSchema: [], hasFAQSchema: false, summary: '' };
 
-        // Run discovery + prioritization + keywords + fanout in parallel (NO answer generation)
+        // Run discovery + prioritization + keywords + fanout in parallel using Claude
         const [discoverResult, fanoutResult, keywordsResult] = await Promise.allSettled([
-          discoverQuestions(pageData, provider, apiKey).then(async (discovery) => {
-            const prioritized = await prioritizeQuestions(discovery.questions || [], pageData, provider, apiKey);
+          discoverQuestions(pageData, 'claude', claudeKey).then(async (discovery) => {
+            const prioritized = await prioritizeQuestions(discovery.questions || [], pageData, 'claude', claudeKey);
             return { discovery, prioritized };
           }),
-          generateFanoutQueries(topicStr, args.domain || '', 12, provider),
-          generateSemanticKeywords(pageData, provider, apiKey)
+          generateFanoutQueries(topicStr, args.domain || '', 12, 'claude'),
+          generateSemanticKeywords(pageData, 'claude', claudeKey)
         ]);
 
         const discoverData = discoverResult.status === 'fulfilled' ? discoverResult.value : null;
@@ -912,18 +941,12 @@ export async function executeTool(toolName, args, writerId = 'default', articleR
 
         const prioritizedQs = discoverData?.prioritized?.prioritizedQuestions || [];
 
-        // If discovery returned no questions (all real sources + AI failed), generate
-        // fallback FAQs via AI so we never show only fanout queries.
+        // If discovery returned no questions, generate fallback FAQs via Claude
         let effectiveQs = prioritizedQs;
         if (effectiveQs.length === 0) {
           try {
-            const fallbackProvider = articleRequirements._aiProvider?.type || 'openai';
-            const fallbackKey = articleRequirements._aiProvider?.apiKey || (fallbackProvider === 'openai' ? process.env.OPENAI_API_KEY : fallbackProvider === 'gemini' ? process.env.GEMINI_API_KEY : process.env.ANTHROPIC_API_KEY);
-            if (fallbackKey) {
-              const { callLLM: faqLLM } = await import('./faqService.js').then(m => ({ callLLM: null })).catch(() => ({ callLLM: null }));
-              // Use the fanout queries themselves to seed real FAQ questions
-              const fanoutSeed = (fanoutData?.fanouts || []).map(f => f.query).slice(0, 6).join('\n');
-              const fallbackPrompt = `You are an AEO expert for CloudFuze, a cloud migration platform.
+            const fanoutSeed = (fanoutData?.fanouts || []).map(f => f.query).slice(0, 6).join('\n');
+            const fallbackPrompt = `You are an AEO expert for CloudFuze, a cloud migration platform.
 Generate 8-10 real FAQ questions that enterprise IT buyers (CIOs, IT Directors) would ask about: "${topicStr}"
 
 These should be questions people actually search on Google, ask ChatGPT/Perplexity, or discuss on Reddit/Quora.
@@ -934,36 +957,13 @@ ${fanoutSeed}
 
 Return JSON: { "prioritizedQuestions": [{ "question": "...", "source": "ai-generated", "intent": "informational|transactional|comparison", "priority": "high|medium|low", "aiCitationScore": 0 }] }
 Put 5-6 as high, 3-4 as medium. High = questions ChatGPT/Gemini would cite answers to.`;
-              const raw = await import('./faqService.js').then(async m => {
-                // callLLM is not exported from faqService — use the agent's own provider
-                const { default: OpenAI } = await import('openai');
-                if (fallbackProvider === 'openai') {
-                  const client = new OpenAI({ apiKey: fallbackKey, timeout: 30000 });
-                  const resp = await client.chat.completions.create({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: fallbackPrompt }], temperature: 0.3, max_tokens: 2000 });
-                  return resp.choices?.[0]?.message?.content || '';
-                }
-                if (fallbackProvider === 'gemini') {
-                  const { GoogleGenerativeAI } = await import('@google/generative-ai');
-                  const genAI = new GoogleGenerativeAI(fallbackKey);
-                  const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
-                  const result = await model.generateContent(fallbackPrompt);
-                  return (await result.response).text();
-                }
-                if (fallbackProvider === 'claude') {
-                  const { default: Anthropic } = await import('@anthropic-ai/sdk');
-                  const client = new Anthropic({ apiKey: fallbackKey, timeout: 30000 });
-                  const resp = await client.messages.create({ model: 'claude-sonnet-4-20250514', max_tokens: 2000, messages: [{ role: 'user', content: fallbackPrompt }] });
-                  return resp.content.filter(b => b.type === 'text').map(b => b.text).join('') || '';
-                }
-                return '';
-              });
-              if (raw) {
-                const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-                try {
-                  const parsed = JSON.parse(cleaned);
-                  effectiveQs = parsed.prioritizedQuestions || [];
-                } catch { /* ignore parse error, fallback to empty */ }
-              }
+            const raw = await callClaude('', fallbackPrompt, { maxTokens: 2000, temperature: 0.3, timeout: 30000 });
+            if (raw) {
+              const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+              try {
+                const parsed = JSON.parse(cleaned);
+                effectiveQs = parsed.prioritizedQuestions || [];
+              } catch { /* ignore parse error */ }
             }
           } catch { /* ignore fallback errors — fanout will fill the gap */ }
         }
@@ -1462,9 +1462,9 @@ Put 5-6 as high, 3-4 as medium. High = questions ChatGPT/Gemini would cite answe
       if (!topicStr) return JSON.stringify({ error: 'Topic is required to generate a framework.' });
 
       try {
-        const provider = articleRequirements._aiProvider?.type || 'openai';
-        const apiKey = articleRequirements._aiProvider?.apiKey || (provider === 'openai' ? process.env.OPENAI_API_KEY : provider === 'gemini' ? process.env.GEMINI_API_KEY : provider === 'claude' ? process.env.ANTHROPIC_API_KEY : null);
-        if (!apiKey) return JSON.stringify({ error: 'No AI API key configured.' });
+        // Always use Claude for all internal tool work
+        const claudeKey = process.env.ANTHROPIC_API_KEY;
+        if (!claudeKey) return JSON.stringify({ error: 'ANTHROPIC_API_KEY not configured. Claude is required for content generation.' });
 
         const contentType = args.content_type || 'educational';
         const additionalContext = args.additional_context || '';
@@ -1473,22 +1473,21 @@ Put 5-6 as high, 3-4 as medium. High = questions ChatGPT/Gemini would cite answe
         const blogPatternsText = formatBlogPatternsForPrompt();
 
         // ═══ PHASE 1: Fetch all research data in parallel BEFORE generating the framework ═══
-        // Check cache first — if same topic was researched recently, skip FAQ + Fanout
         const cached = getCachedResearch(topicStr);
         const faqPageData = { url: null, title: topicStr, h1: topicStr, headings: [], paragraphs: [], existingFAQs: [], wordCount: 0, existingSchema: [], hasFAQSchema: false, summary: '' };
 
         const parallelTasks = [
-          // FAQ discovery + prioritization (skip if cached)
+          // FAQ discovery + prioritization using Claude (skip if cached)
           cached?.faqData
             ? Promise.resolve(cached.faqData)
-            : discoverQuestions(faqPageData, provider, apiKey).then(async (discovery) => {
-                const prioritized = await prioritizeQuestions(discovery.questions || [], faqPageData, provider, apiKey);
+            : discoverQuestions(faqPageData, 'claude', claudeKey).then(async (discovery) => {
+                const prioritized = await prioritizeQuestions(discovery.questions || [], faqPageData, 'claude', claudeKey);
                 return { discovery, prioritized };
               }).catch(() => null),
-          // Fanout queries (skip if cached)
+          // Fanout queries using Claude (skip if cached)
           cached?.fanoutData
             ? Promise.resolve(cached.fanoutData)
-            : generateFanoutQueries(topicStr, '', 12, provider).catch(() => null),
+            : generateFanoutQueries(topicStr, '', 12, 'claude').catch(() => null),
           // Published articles for internal linking
           getArticles({}).catch(() => []),
           // SharePoint product data
@@ -1744,43 +1743,9 @@ REMINDER: Visual suggestions (📊 Table, 🖼 Image, 🎨 Infographic, 🔀 Dia
 
 Output ONLY the Markdown framework + keywords section. No preamble, no commentary.`;
 
-        let frameworkContent = '';
-
-        if (provider === 'openai') {
-          const { default: OpenAI } = await import('openai');
-          const client = new OpenAI({ apiKey, timeout: 60000 });
-          const response = await client.chat.completions.create({
-            model: 'gpt-4o-mini',
-            messages: [
-              { role: 'system', content: 'You are an expert content strategist. Generate article frameworks optimized for AI search engine visibility. You MUST use the provided FAQ and Fanout questions as H2/H3 headings in your framework. For 3-6 sections, you MUST add INLINE visual suggestions (📊 Table, 🖼 Image, 🎨 Infographic, 🔀 Diagram, 📈 Stats, 📸 Screenshot) directly under each section writing guide — with specific descriptions of what to create. EVERY Image, Infographic, Diagram, and Screenshot MUST include an alt-text suggestion with the primary keyword. Do NOT put visuals in a separate section.' },
-              { role: 'user', content: frameworkPrompt }
-            ],
-            temperature: 0.4,
-            max_tokens: 6000
-          });
-          frameworkContent = response.choices[0]?.message?.content || '';
-        } else if (provider === 'claude') {
-          const { default: Anthropic } = await import('@anthropic-ai/sdk');
-          const client = new Anthropic({ apiKey, timeout: 60000 });
-          const response = await client.messages.create({
-            model: 'claude-sonnet-4-20250514',
-            max_tokens: 6000,
-            system: 'You are an expert content strategist. Generate article frameworks optimized for AI search engine visibility. You MUST use the provided FAQ and Fanout questions as H2/H3 headings in your framework. For 3-6 sections, you MUST add INLINE visual suggestions (📊 Table, 🖼 Image, 🎨 Infographic, 🔀 Diagram, 📈 Stats, 📸 Screenshot) directly under each section writing guide — with specific descriptions of what to create. EVERY Image, Infographic, Diagram, and Screenshot MUST include an alt-text suggestion with the primary keyword. Do NOT put visuals in a separate section.',
-            messages: [{ role: 'user', content: frameworkPrompt }],
-            temperature: 0.4
-          });
-          frameworkContent = response.content.filter(b => b.type === 'text').map(b => b.text).join('\n') || '';
-        } else {
-          const { GoogleGenerativeAI } = await import('@google/generative-ai');
-          const genAI = new GoogleGenerativeAI(apiKey);
-          const model = genAI.getGenerativeModel({
-            model: 'gemini-2.0-flash',
-            systemInstruction: 'You are an expert content strategist. Generate article frameworks optimized for AI search engine visibility. You MUST use the provided FAQ and Fanout questions as H2/H3 headings in your framework. For 3-6 sections, you MUST add INLINE visual suggestions (📊 Table, 🖼 Image, 🎨 Infographic, 🔀 Diagram, 📈 Stats, 📸 Screenshot) directly under each section writing guide — with specific descriptions of what to create. EVERY Image, Infographic, Diagram, and Screenshot MUST include an alt-text suggestion with the primary keyword. Do NOT put visuals in a separate section.',
-            generationConfig: { maxOutputTokens: 6000, temperature: 0.4 }
-          });
-          const response = await model.generateContent(frameworkPrompt);
-          frameworkContent = response.response.text() || '';
-        }
+        // Always use Claude for framework content generation (regardless of user-selected chat model)
+        const frameworkSystemPrompt = 'You are an expert content strategist. Generate article frameworks optimized for AI search engine visibility. You MUST use the provided FAQ and Fanout questions as H2/H3 headings in your framework. For 3-6 sections, you MUST add INLINE visual suggestions (📊 Table, 🖼 Image, 🎨 Infographic, 🔀 Diagram, 📈 Stats, 📸 Screenshot) directly under each section writing guide — with specific descriptions of what to create. EVERY Image, Infographic, Diagram, and Screenshot MUST include an alt-text suggestion with the primary keyword. Do NOT put visuals in a separate section.';
+        let frameworkContent = await callClaude(frameworkSystemPrompt, frameworkPrompt, { maxTokens: 6000, temperature: 0.4, timeout: 60000 });
 
         // ═══ PHASE 4: Post-process — clean up, find leftover FAQs, append links ═══
         frameworkContent = frameworkContent.replace(/^```(?:markdown|md)?\s*/i, '').replace(/\s*```$/i, '').trim();
@@ -1929,9 +1894,8 @@ Output ONLY the Markdown framework + keywords section. No preamble, no commentar
       }
 
       try {
-        const provider = articleRequirements._aiProvider?.type || 'openai';
-        const apiKey = articleRequirements._aiProvider?.apiKey || (provider === 'openai' ? process.env.OPENAI_API_KEY : provider === 'gemini' ? process.env.GEMINI_API_KEY : provider === 'claude' ? process.env.ANTHROPIC_API_KEY : null);
-        if (!apiKey) return JSON.stringify({ error: 'No AI API key configured.' });
+        // Always use Claude for article editing
+        if (!process.env.ANTHROPIC_API_KEY) return JSON.stringify({ error: 'ANTHROPIC_API_KEY not configured. Claude is required for content generation.' });
 
         // Detect if the content is a framework/outline (headings + brief guides) vs a full article
         const lines = currentArticle.split('\n').filter(l => l.trim());
@@ -1978,43 +1942,12 @@ RULES:
 - Preserve the meta title and description block if present.
 - Preserve the inline "📋 Sources for this section" blocks under each section. If the edit adds new claims or data, add corresponding inline sources under that section. If rewriting a section, update its source block to match the new content. Never remove existing sources unless explicitly asked.`;
 
-        let editedContent = '';
-
-        if (provider === 'openai') {
-          const { default: OpenAI } = await import('openai');
-          const client = new OpenAI({ apiKey, timeout: 180000 });
-          const response = await client.chat.completions.create({
-            model: 'gpt-4o-mini',
-            messages: [
-              { role: 'system', content: 'You are an expert content editor. Apply precise edits to articles while maintaining quality, structure, and SEO optimization.' },
-              { role: 'user', content: editPrompt }
-            ],
-            temperature: 0.3,
-            max_tokens: 10000
-          });
-          editedContent = response.choices[0]?.message?.content || '';
-        } else if (provider === 'claude') {
-          const { default: Anthropic } = await import('@anthropic-ai/sdk');
-          const client = new Anthropic({ apiKey, timeout: 180000 });
-          const response = await client.messages.create({
-            model: 'claude-sonnet-4-20250514',
-            max_tokens: 10000,
-            system: 'You are an expert content editor. Apply precise edits to articles while maintaining quality, structure, and SEO optimization.',
-            messages: [{ role: 'user', content: editPrompt }],
-            temperature: 0.3
-          });
-          editedContent = response.content.filter(b => b.type === 'text').map(b => b.text).join('\n') || '';
-        } else {
-          const { GoogleGenerativeAI } = await import('@google/generative-ai');
-          const genAI = new GoogleGenerativeAI(apiKey);
-          const model = genAI.getGenerativeModel({
-            model: 'gemini-2.0-flash',
-            systemInstruction: 'You are an expert content editor. Apply precise edits to articles while maintaining quality, structure, and SEO optimization.',
-            generationConfig: { maxOutputTokens: 10000, temperature: 0.3 }
-          });
-          const response = await model.generateContent(editPrompt);
-          editedContent = response.response.text() || '';
-        }
+        // Always use Claude for article editing (regardless of user-selected chat model)
+        let editedContent = await callClaude(
+          'You are an expert content editor. Apply precise edits to articles while maintaining quality, structure, and SEO optimization.',
+          editPrompt,
+          { maxTokens: 10000, temperature: 0.3, timeout: 180000 }
+        );
 
         if (!editedContent || editedContent.length < 100) {
           return JSON.stringify({ error: 'Edit produced insufficient content. Please try again.' });
@@ -2063,9 +1996,8 @@ RULES:
       if (!topicStr) return JSON.stringify({ error: 'Topic is required to generate an article.' });
 
       try {
-        const provider = articleRequirements._aiProvider?.type || 'openai';
-        const apiKey = articleRequirements._aiProvider?.apiKey || (provider === 'openai' ? process.env.OPENAI_API_KEY : provider === 'gemini' ? process.env.GEMINI_API_KEY : provider === 'claude' ? process.env.ANTHROPIC_API_KEY : null);
-        if (!apiKey) return JSON.stringify({ error: 'No AI API key configured.' });
+        // Always use Claude for article generation
+        if (!process.env.ANTHROPIC_API_KEY) return JSON.stringify({ error: 'ANTHROPIC_API_KEY not configured. Claude is required for content generation.' });
 
         // Gather writer context
         const writerProfile = getWriterProfile(writerId);
@@ -2158,43 +2090,12 @@ RULES:
           writerName: reqs._writerName || ''
         });
 
-        let articleContent = '';
-
-        if (provider === 'openai') {
-          const { default: OpenAI } = await import('openai');
-          const client = new OpenAI({ apiKey, timeout: 180000 });
-          const response = await client.chat.completions.create({
-            model: 'gpt-4o-mini',
-            messages: [
-              { role: 'system', content: ARTICLE_GEN_SYSTEM_PROMPT },
-              { role: 'user', content: articlePrompt }
-            ],
-            temperature: 0.5,
-            max_tokens: 10000
-          });
-          articleContent = response.choices[0]?.message?.content || '';
-        } else if (provider === 'claude') {
-          const { default: Anthropic } = await import('@anthropic-ai/sdk');
-          const client = new Anthropic({ apiKey, timeout: 180000 });
-          const response = await client.messages.create({
-            model: 'claude-sonnet-4-20250514',
-            max_tokens: 10000,
-            system: ARTICLE_GEN_SYSTEM_PROMPT,
-            messages: [{ role: 'user', content: articlePrompt }],
-            temperature: 0.5
-          });
-          articleContent = response.content.filter(b => b.type === 'text').map(b => b.text).join('\n') || '';
-        } else {
-          const { GoogleGenerativeAI } = await import('@google/generative-ai');
-          const genAI = new GoogleGenerativeAI(apiKey);
-          const model = genAI.getGenerativeModel({
-            model: 'gemini-2.0-flash',
-            systemInstruction: ARTICLE_GEN_SYSTEM_PROMPT,
-            generationConfig: { maxOutputTokens: 10000, temperature: 0.5 }
-          });
-          const response = await model.generateContent(articlePrompt);
-          articleContent = response.response.text() || '';
-        }
+        // Always use Claude for article generation (regardless of user-selected chat model)
+        let articleContent = await callClaude(
+          ARTICLE_GEN_SYSTEM_PROMPT,
+          articlePrompt,
+          { maxTokens: 10000, temperature: 0.5, timeout: 180000 }
+        );
 
         if (!articleContent || articleContent.length < 200) {
           return JSON.stringify({ error: 'Article generation produced insufficient content. Please try again.' });
@@ -3025,6 +2926,11 @@ export async function runAgent(systemPrompt, userPrompt, provider, articleRequir
   logProvider('Agent Chat (tool-calling)', provider);
   const startTime = Date.now();
 
+  // ═══ SELF-IMPROVING FEEDBACK LOOP ═══
+  // Learned rules are loaded once at startup from server/data/learned-rules.json
+  // and appended to the system prompt. No per-call DB queries.
+  const enhancedSystemPrompt = systemPrompt + getLearnedRulesPrompt();
+
   // Create a Langfuse trace for this agent turn
   const model = provider.type === 'ollama' ? (provider.model || 'llama3.2') : PROVIDER_MODELS[provider.type];
   const lfTrace = startTrace({
@@ -3032,7 +2938,7 @@ export async function runAgent(systemPrompt, userPrompt, provider, articleRequir
     sessionId: articleRequirements._sessionId,
     topic: articleRequirements.topic,
     writerName: articleRequirements._writerName,
-    message: userPrompt,
+    message: articleRequirements._rawUserMessage || userPrompt,
     provider: provider.type,
     model
   });
@@ -3043,13 +2949,13 @@ export async function runAgent(systemPrompt, userPrompt, provider, articleRequir
   try {
     let result;
     if (provider.type === 'openai') {
-      result = await runAgentOpenAI(systemPrompt, userPrompt, provider, reqsWithTrace, onToolCall);
+      result = await runAgentOpenAI(enhancedSystemPrompt, userPrompt, provider, reqsWithTrace, onToolCall);
     } else if (provider.type === 'gemini') {
-      result = await runAgentGemini(systemPrompt, userPrompt, provider, reqsWithTrace, onToolCall);
+      result = await runAgentGemini(enhancedSystemPrompt, userPrompt, provider, reqsWithTrace, onToolCall);
     } else if (provider.type === 'claude') {
-      result = await runAgentClaude(systemPrompt, userPrompt, provider, reqsWithTrace, onToolCall);
+      result = await runAgentClaude(enhancedSystemPrompt, userPrompt, provider, reqsWithTrace, onToolCall);
     } else if (provider.type === 'ollama') {
-      result = await runAgentOllama(systemPrompt, userPrompt, provider, reqsWithTrace, onToolCall);
+      result = await runAgentOllama(enhancedSystemPrompt, userPrompt, provider, reqsWithTrace, onToolCall);
     } else {
       throw new Error('No AI provider configured');
     }

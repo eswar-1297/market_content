@@ -108,7 +108,7 @@ export default function ChatPanel({ messages, onSendMessage, loading, onSetWrite
 
         {/* Chat messages */}
         {messages.map((msg, i) => (
-          <ChatMessage key={i} message={msg} />
+          <ChatMessage key={i} message={msg} messages={messages} messageIndex={i} />
         ))}
 
         {loading && (
@@ -191,7 +191,7 @@ function BotBubble({ children }) {
   )
 }
 
-function ChatMessage({ message }) {
+function ChatMessage({ message, messages, messageIndex }) {
   const [copied, setCopied] = useState(false)
   const [feedbackScore, setFeedbackScore] = useState(null)  // null | 1 | 0
   const [showFeedbackInput, setShowFeedbackInput] = useState(false)
@@ -199,6 +199,11 @@ function ChatMessage({ message }) {
   const [feedbackSubmitted, setFeedbackSubmitted] = useState(false)
   const [feedbackSending, setFeedbackSending] = useState(false)
   const isBot = message.role === 'assistant'
+
+  // Find the preceding user message for feedback context
+  const precedingUserMsg = isBot && messages && messageIndex > 0
+    ? messages.slice(0, messageIndex).reverse().find(m => m.role === 'user')
+    : null
 
   const copyText = (text) => {
     navigator.clipboard.writeText(text)
@@ -211,7 +216,7 @@ function ChatMessage({ message }) {
     setShowFeedbackInput(true)
   }
 
-  const submitFeedback = async () => {
+  const sendFeedback = async (comment) => {
     if (!message.traceId) return
     setFeedbackSending(true)
     try {
@@ -221,7 +226,10 @@ function ChatMessage({ message }) {
         body: JSON.stringify({
           traceId: message.traceId,
           score: feedbackScore,
-          comment: feedbackText.trim()
+          comment: comment || '',
+          userMessage: precedingUserMsg?.content || '',
+          assistantResponse: typeof message.content === 'string' ? message.content.substring(0, 3000) : '',
+          toolsUsed: (message.toolSteps || []).map(s => s.tool).join(', ')
         })
       })
       setFeedbackSubmitted(true)
@@ -233,27 +241,8 @@ function ChatMessage({ message }) {
     }
   }
 
-  const skipFeedbackText = async () => {
-    if (!message.traceId) return
-    setFeedbackSending(true)
-    try {
-      await authFetch('/api/copilot/feedback', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          traceId: message.traceId,
-          score: feedbackScore,
-          comment: ''
-        })
-      })
-      setFeedbackSubmitted(true)
-      setShowFeedbackInput(false)
-    } catch (err) {
-      console.error('Feedback error:', err)
-    } finally {
-      setFeedbackSending(false)
-    }
-  }
+  const submitFeedback = () => sendFeedback(feedbackText.trim())
+  const skipFeedbackText = () => sendFeedback('')
 
   return (
     <div className={`flex items-start gap-2.5 ${isBot ? '' : 'flex-row-reverse'}`}>

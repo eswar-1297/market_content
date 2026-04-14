@@ -93,6 +93,23 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_content_snapshots_session ON content_snapshots(session_id);
+
+  CREATE TABLE IF NOT EXISTS agent_feedback (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trace_id TEXT NOT NULL,
+    session_id TEXT DEFAULT '',
+    writer_id TEXT DEFAULT '',
+    score INTEGER NOT NULL,
+    comment TEXT DEFAULT '',
+    user_message TEXT DEFAULT '',
+    assistant_response TEXT DEFAULT '',
+    topic TEXT DEFAULT '',
+    tools_used TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_agent_feedback_writer ON agent_feedback(writer_id);
+  CREATE INDEX IF NOT EXISTS idx_agent_feedback_score ON agent_feedback(score);
 `);
 
 const ensureDefaultWriter = db.prepare(`
@@ -314,6 +331,53 @@ export function deleteSession(id) {
   db.prepare('DELETE FROM chat_messages WHERE session_id = ?').run(id);
   const info = db.prepare('DELETE FROM copilot_sessions WHERE id = ?').run(id);
   return info.changes > 0;
+}
+
+// ═══ AGENT FEEDBACK ═══
+
+export function saveFeedback({ traceId, sessionId, writerId, score, comment, userMessage, assistantResponse, topic, toolsUsed }) {
+  const stmt = db.prepare(
+    'INSERT INTO agent_feedback (trace_id, session_id, writer_id, score, comment, user_message, assistant_response, topic, tools_used) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  );
+  stmt.run(
+    traceId || '',
+    sessionId || '',
+    writerId || '',
+    score,
+    comment || '',
+    (userMessage || '').substring(0, 2000),
+    (assistantResponse || '').substring(0, 3000),
+    topic || '',
+    toolsUsed || ''
+  );
+}
+
+/**
+ * Get recent negative feedback for a writer (or all writers).
+ * Used to inject "lessons learned" into the agent prompt so it avoids repeating mistakes.
+ * @param {string} writerId - Filter by writer, or '' for all
+ * @param {number} limit - Max feedback items to return
+ * @returns {Array} Feedback entries with comment, user_message, assistant_response, topic
+ */
+export function getNegativeFeedback(writerId = '', limit = 10) {
+  let query = 'SELECT comment, user_message, assistant_response, topic, tools_used, created_at FROM agent_feedback WHERE score = 0 AND comment != \'\'';
+  const params = [];
+  if (writerId) {
+    query += ' AND writer_id = ?';
+    params.push(writerId);
+  }
+  query += ' ORDER BY created_at DESC LIMIT ?';
+  params.push(limit);
+  return db.prepare(query).all(...params);
+}
+
+/**
+ * Get all feedback (positive + negative) for analytics.
+ */
+export function getAllFeedback(limit = 50) {
+  return db.prepare(
+    'SELECT * FROM agent_feedback ORDER BY created_at DESC LIMIT ?'
+  ).all(limit);
 }
 
 export default db;

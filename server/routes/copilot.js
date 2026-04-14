@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { generateWritingPlan, analyzeLive, getCorrections, analyzeWriterProfile } from '../services/copilotService.js';
 import { ingestArticle, findRelatedArticles, listArticles, deleteArticle, getWriterProfile, createWriter, listWriters } from '../services/memoryService.js';
 import { trackKeywords, generateKeywordSuggestions } from '../services/keywordEngine.js';
-import { getSession, updateSession, listSessions, createSession, saveChatMessage, getSessionMessages, deleteSession, saveContentSnapshot, getContentSnapshots, getSnapshotContent, deleteContentSnapshot } from '../db/copilotDb.js';
+import { getSession, updateSession, listSessions, createSession, saveChatMessage, getSessionMessages, deleteSession, saveContentSnapshot, getContentSnapshots, getSnapshotContent, deleteContentSnapshot, saveFeedback } from '../db/copilotDb.js';
 import { randomUUID } from 'crypto';
 import { CHAT_SYSTEM_PROMPT, buildChatPrompt } from '../utils/copilotPrompts.js';
 import { runAgent } from '../services/agentEngine.js';
@@ -10,6 +10,7 @@ import { refreshG2Reviews, getG2CacheStatus, bulkUpdateReviewUrls, getG2Reviews 
 import { getTodayTopicForWriter } from '../services/contentCalendarService.js';
 import { checkAIDetection, checkPlagiarism, isCopyleaksConfigured, isPlagiarismConfigured } from '../services/contentCheckService.js';
 import { getLangfuse, flushLangfuse, recordScore } from '../services/langfuseService.js';
+import { addLearnedRule, getLearnedRules, removeLearnedRule } from '../services/feedbackLearningService.js';
 
 const router = Router();
 
@@ -90,7 +91,7 @@ router.post('/chat', async (req, res) => {
 
     const prompt = buildChatPrompt(message.trim(), currentContent || '', conversationHistory, writerContext, articleRequirements);
     const writerId = req.user?.email || req.body.writerId || 'default';
-    const agentReqs = { ...articleRequirements, _currentContent: currentContent || '', _currentHTML: currentHTML || '', _writerName: writerContext?.writerName || '', _writerId: writerId, _sessionId: activeSessionId || undefined, _aiProvider: aiProvider };
+    const agentReqs = { ...articleRequirements, _currentContent: currentContent || '', _currentHTML: currentHTML || '', _writerName: writerContext?.writerName || '', _writerId: writerId, _sessionId: activeSessionId || undefined, _aiProvider: aiProvider, _rawUserMessage: message.trim() };
 
     const agentResult = await runAgent(CHAT_SYSTEM_PROMPT, prompt, aiProvider, agentReqs);
 
@@ -143,10 +144,10 @@ router.post('/chat', async (req, res) => {
   }
 });
 
-// ═══ FEEDBACK — thumbs up/down + comment → Langfuse score ═══
+// ═══ FEEDBACK — thumbs up/down + comment → Langfuse score + SQLite for learning ═══
 router.post('/feedback', async (req, res) => {
   try {
-    const { traceId, score, comment } = req.body;
+    const { traceId, score, comment, userMessage, assistantResponse, toolsUsed } = req.body;
 
     if (!traceId) {
       return res.status(400).json({ error: 'traceId is required' });
@@ -155,13 +156,67 @@ router.post('/feedback', async (req, res) => {
       return res.status(400).json({ error: 'score must be 1 (thumbs up) or 0 (thumbs down)' });
     }
 
+    // 1. Record in Langfuse
     recordScore(traceId, score, comment || '');
     await flushLangfuse();
 
-    res.json({ success: true, traceId, score, comment: comment || '' });
+    // 2. Save to SQLite for record-keeping
+    const writerId = req.user?.email || req.body.writerId || '';
+    const sessionId = req.body.sessionId || '';
+    const topic = req.body.topic || '';
+    saveFeedback({
+      traceId,
+      sessionId,
+      writerId,
+      score,
+      comment: comment || '',
+      userMessage: userMessage || '',
+      assistantResponse: assistantResponse || '',
+      topic,
+      toolsUsed: toolsUsed || ''
+    });
+
+    console.log(`[Feedback] ${score === 1 ? '👍' : '👎'} traceId=${traceId} | comment=${comment ? 'yes' : 'none'} | writer=${writerId || 'anonymous'}`);
+
+    // 3. If negative feedback WITH a comment → generate a permanent learned rule
+    //    This is processed ONCE and permanently improves all future responses.
+    let newRule = null;
+    if (score === 0 && comment && comment.trim().length > 2) {
+      // Fire and forget — don't block the response
+      addLearnedRule({
+        comment: comment || '',
+        userMessage: userMessage || '',
+        assistantResponse: assistantResponse || '',
+        toolsUsed: toolsUsed || '',
+        topic: topic || ''
+      }).then(rule => {
+        if (rule) console.log(`📘 [Feedback] Permanent rule created from feedback`);
+      }).catch(e => {
+        console.warn('[Feedback] Rule generation failed:', e.message);
+      });
+      newRule = 'processing';
+    }
+
+    res.json({ success: true, traceId, score, comment: comment || '', ruleGenerated: newRule === 'processing' });
   } catch (err) {
     console.error('Feedback error:', err.message);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ═══ LEARNED RULES — view/manage permanent rules from feedback ═══
+router.get('/learned-rules', (req, res) => {
+  const rules = getLearnedRules();
+  res.json({ count: rules.length, rules });
+});
+
+router.delete('/learned-rules/:index', (req, res) => {
+  const index = parseInt(req.params.index);
+  const removed = removeLearnedRule(index);
+  if (removed) {
+    res.json({ success: true, removed });
+  } else {
+    res.status(404).json({ error: 'Rule not found at that index' });
   }
 });
 
