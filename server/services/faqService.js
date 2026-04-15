@@ -3,6 +3,7 @@ import * as cheerio from 'cheerio';
 import OpenAI from 'openai';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { fetchAllRealQuestions } from './questionSources.js';
+import { fetchSemrushKeywords, isSemrushConfigured } from './semrushService.js';
 
 const AI_TIMEOUT_MS = 90000;
 const openaiClients = new Map();
@@ -308,10 +309,11 @@ export async function generateSemanticKeywords(pageData, provider, apiKey) {
   const cseApiKey = process.env.GOOGLE_CSE_KEY || null;
   const cseCx = process.env.GOOGLE_CSE_CX || null;
 
-  console.log(`  ${C.dim}├─${C.reset} ${C.yellow}Semantic Keywords: launching 3 parallel sources (CSE + Autocomplete + LLM)${C.reset}`);
+  const semrushEnabled = isSemrushConfigured();
+  console.log(`  ${C.dim}├─${C.reset} ${C.yellow}Semantic Keywords: launching ${semrushEnabled ? '4' : '3'} parallel sources (CSE + Autocomplete + LLM${semrushEnabled ? ' + SEMrush' : ''})${C.reset}`);
 
-  // Run all 3 sources in parallel
-  const [autocompleteResult, cseResult, llmResult] = await Promise.allSettled([
+  // Run all sources in parallel (SEMrush added as 4th when API key is configured)
+  const [autocompleteResult, cseResult, llmResult, semrushResult] = await Promise.allSettled([
     fetchGoogleAutocompleteSuggestions(title),
     fetchCSEKeywords(title, cseApiKey, cseCx),
     (async () => {
@@ -353,13 +355,15 @@ Rules:
 
       const response = await callLLM(prompt, systemPrompt, provider, apiKey, 'Semantic Keywords');
       return parseAIJson(response);
-    })()
+    })(),
+    semrushEnabled ? fetchSemrushKeywords(title) : Promise.resolve({ core: [], lsi: [], longTail: [], withVolume: [] })
   ]);
 
   // Gather raw data from all sources
   const autoSuggestions = autocompleteResult.status === 'fulfilled' ? autocompleteResult.value : [];
   const cseData = cseResult.status === 'fulfilled' ? cseResult.value : { phrases: [], entities: [] };
   const llmData = llmResult.status === 'fulfilled' ? llmResult.value : {};
+  const semrushData = semrushResult.status === 'fulfilled' ? semrushResult.value : { core: [], lsi: [], longTail: [], withVolume: [] };
 
   const llmCore = llmData.coreTopicKeywords || [];
   const llmLSI = llmData.lsiKeywords || [];
@@ -417,19 +421,72 @@ Rules:
   const cseLSI = cseData.phrases.filter(p => p.split(/\s+/).length < 3);
 
   // Merge and deduplicate each category
-  const mergedCore = dedup([...llmCore, ...autoCore]).slice(0, 10);
-  const mergedLSI = dedup([...llmLSI, ...cseLSI, ...autoLSI]).slice(0, 20);
-  const mergedLongTail = dedup([...llmLongTail, ...autoLongTail, ...cseLongTail]).slice(0, 20);
+  // ── HYBRID MERGE: SEMrush (volume-ranked real data) goes first ──────────────
+  // SEMrush keywords have proven search volume, so they take priority over AI-guessed terms.
+  // AI/Autocomplete/CSE fill gaps for concepts SEMrush may not surface (branded terms, GEO-specific).
+  const mergedCore     = dedup([...semrushData.core,     ...llmCore,     ...autoCore                    ]).slice(0, 10);
+  const mergedLSI      = dedup([...semrushData.lsi,      ...llmLSI,      ...cseLSI,      ...autoLSI     ]).slice(0, 20);
+  const mergedLongTail = dedup([...semrushData.longTail, ...llmLongTail, ...autoLongTail, ...cseLongTail]).slice(0, 20);
   const mergedEntities = dedup([...llmEntities, ...cseData.entities, ...autoEntities]).slice(0, 12);
 
+  // ── BEST KEYWORDS: volume-ranked hybrid list ─────────────────────────────────
+  // Each entry gets { keyword, volume, source } for display.
+  // If SEMrush has volume data for a keyword → use it.
+  // AI/Autocomplete/CSE-only keywords get volume: null (no real data available).
+  const volumeMap = new Map(semrushData.withVolume.map(k => [k.keyword.toLowerCase(), k]));
+
+  const allMerged = dedup([
+    ...mergedCore,
+    ...mergedLSI,
+    ...mergedLongTail,
+    ...mergedEntities
+  ]);
+
+  const bestKeywords = allMerged
+    .map(kw => {
+      const semrushEntry = volumeMap.get(kw.toLowerCase());
+      return {
+        keyword:     kw,
+        volume:      semrushEntry ? semrushEntry.volume      : null,
+        cpc:         semrushEntry ? semrushEntry.cpc         : null,
+        competition: semrushEntry ? semrushEntry.competition : null,
+        source:      semrushEntry ? 'semrush' : 'ai'
+      };
+    })
+    // Sort: SEMrush keywords by volume desc, then AI keywords alphabetically
+    .sort((a, b) => {
+      if (a.volume !== null && b.volume !== null) return b.volume - a.volume;
+      if (a.volume !== null) return -1;
+      if (b.volume !== null) return 1;
+      return a.keyword.localeCompare(b.keyword);
+    })
+    .slice(0, 30);
+
+  // ── Summary logs ──────────────────────────────────────────────────────────────
+  const semrushTotal = semrushData.core.length + semrushData.lsi.length + semrushData.longTail.length;
+  const semrushInBest = bestKeywords.filter(k => k.source === 'semrush').length;
+  const aiInBest      = bestKeywords.filter(k => k.source === 'ai').length;
+
   console.log(`  ${C.dim}├─${C.reset} ${C.green}Semantic Keywords merged: ${mergedCore.length} core + ${mergedLSI.length} LSI + ${mergedLongTail.length} long-tail + ${mergedEntities.length} entities${C.reset}`);
-  console.log(`  ${C.dim}│  ├─ Sources: LLM=${llmCore.length + llmLSI.length + llmLongTail.length + llmEntities.length}, Autocomplete=${autoSuggestions.length}, CSE=${cseData.phrases.length + cseData.entities.length}${C.reset}`);
+  console.log(`  ${C.dim}│  ├─ Sources: SEMrush=${semrushTotal}, LLM=${llmCore.length + llmLSI.length + llmLongTail.length + llmEntities.length}, Autocomplete=${autoSuggestions.length}, CSE=${cseData.phrases.length + cseData.entities.length}${C.reset}`);
+  console.log(`  ${C.dim}│  └─ Best keywords: ${bestKeywords.length} total (${semrushInBest} with real volume, ${aiInBest} AI-generated)${C.reset}`);
+
+  if (semrushEnabled && bestKeywords.length > 0) {
+    const topKw = bestKeywords.filter(k => k.volume !== null).slice(0, 3)
+      .map(k => `"${k.keyword}" (${k.volume.toLocaleString()}/mo)`).join(' | ');
+    if (topKw) console.log(`  ${C.dim}│     Top by volume: ${topKw}${C.reset}`);
+  }
 
   return {
     coreTopicKeywords: mergedCore,
-    lsiKeywords: mergedLSI,
-    longTailPhrases: mergedLongTail,
-    entityKeywords: mergedEntities,
+    lsiKeywords:       mergedLSI,
+    longTailPhrases:   mergedLongTail,
+    entityKeywords:    mergedEntities,
+    bestKeywords,                                              // hybrid ranked list with volume
+    semrushEnabled,                                            // flag so frontend knows data source
+    semrushData: semrushData.withVolume.length > 0
+      ? semrushData.withVolume
+      : undefined
   };
 }
 

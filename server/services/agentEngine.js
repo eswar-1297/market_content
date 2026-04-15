@@ -20,32 +20,62 @@ import { ICP_FRAMEWORK } from '../utils/copilotPrompts.js';
 import { startTrace, flushLangfuse } from './langfuseService.js';
 import { getLearnedRulesPrompt, addLearnedRule } from './feedbackLearningService.js';
 
-// ═══ CLAUDE — COMMON MODEL FOR ALL INTERNAL TOOL WORK ═══
+// ═══ INTERNAL LLM — Claude primary, OpenAI fallback ═══
 // The user-selected model (OpenAI/Gemini/Ollama) is used for the agent loop (chat + tool calling).
-// Claude is ALWAYS used for internal content generation after tool calling:
-//   - generate_framework, generate_article, edit_article
-//   - FAQ generation fallback
-//   - Service calls (faqService, fanoutService)
-// This ensures consistent, high-quality output regardless of the chat model.
+// Claude is used for internal content generation after tool calling.
+// If Claude key is missing or fails, OpenAI (gpt-4o-mini) is used as fallback.
 
 async function callClaude(systemPrompt, userPrompt, { maxTokens = 6000, temperature = 0.4, timeout = 120000 } = {}) {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error('ANTHROPIC_API_KEY not configured. Claude is required for content generation.');
-  const { default: Anthropic } = await import('@anthropic-ai/sdk');
-  const client = new Anthropic({ apiKey, timeout });
-  const response = await client.messages.create({
-    model: 'claude-sonnet-4-20250514',
-    max_tokens: maxTokens,
-    system: systemPrompt,
-    messages: [{ role: 'user', content: userPrompt }],
-    temperature
-  });
-  return response.content.filter(b => b.type === 'text').map(b => b.text).join('\n') || '';
+  // Try Claude first
+  const claudeKey = process.env.ANTHROPIC_API_KEY;
+  if (claudeKey) {
+    try {
+      const { default: Anthropic } = await import('@anthropic-ai/sdk');
+      const client = new Anthropic({ apiKey: claudeKey, timeout });
+      const response = await client.messages.create({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: maxTokens,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: userPrompt }],
+        temperature
+      });
+      return response.content.filter(b => b.type === 'text').map(b => b.text).join('\n') || '';
+    } catch (e) {
+      console.warn(`[LLM] Claude failed (${e.message}), falling back to OpenAI...`);
+    }
+  }
+
+  // Fallback to OpenAI
+  const openaiKey = process.env.OPENAI_API_KEY;
+  if (openaiKey) {
+    try {
+      const { default: OpenAI } = await import('openai');
+      const client = new OpenAI({ apiKey: openaiKey, timeout });
+      const response = await client.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [
+          ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
+          { role: 'user', content: userPrompt }
+        ],
+        temperature,
+        max_tokens: maxTokens
+      });
+      return response.choices[0]?.message?.content || '';
+    } catch (e) {
+      console.error(`[LLM] OpenAI fallback also failed: ${e.message}`);
+      throw new Error('Both Claude and OpenAI failed. Check your API keys.');
+    }
+  }
+
+  throw new Error('No AI API key configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY in .env');
 }
 
-// Helper to get Claude provider info for service calls (faqService, fanoutService)
-function getClaudeProvider() {
-  return { type: 'claude', apiKey: process.env.ANTHROPIC_API_KEY };
+// Helper to get provider info for service calls (faqService, fanoutService)
+// Prefers Claude, falls back to OpenAI
+function getInternalProvider() {
+  if (process.env.ANTHROPIC_API_KEY) return { type: 'claude', apiKey: process.env.ANTHROPIC_API_KEY };
+  if (process.env.OPENAI_API_KEY) return { type: 'openai', apiKey: process.env.OPENAI_API_KEY };
+  return null;
 }
 
 // ═══ RESEARCH CACHE (10 min TTL) — avoids re-running FAQ+Fanout for same topic ═══
@@ -470,8 +500,10 @@ export async function executeTool(toolName, args, writerId = 'default', articleR
       if (rawContent.length < 20) return JSON.stringify({ error: 'Content too short to analyze.' });
 
       try {
-        // Always use Claude for internal analysis work
-        const claudeKey = process.env.ANTHROPIC_API_KEY;
+        // Use Claude (primary) or OpenAI (fallback) for internal analysis work
+        const _ip = getInternalProvider();
+        const claudeKey = _ip?.apiKey || null;
+        const _ipType = _ip?.type || 'openai';
 
         const isURL = /^https?:\/\/[^\s]+$/i.test(rawContent);
         let csabfInput = rawContent;
@@ -536,21 +568,21 @@ export async function executeTool(toolName, args, writerId = 'default', articleR
 
         const topicStr = pageData.h1 || pageData.title || 'content';
 
-        // ═══ STEP 2: Run CSABF + ICP + FAQ + Fanout + Keywords in parallel (always Claude) ═══
+        // ═══ STEP 2: Run CSABF + ICP + FAQ + Fanout + Keywords in parallel ═══
         const cachedAnalysis = getCachedResearch(topicStr);
         const [csabfResult, discoverResult, fanoutResult, keywordsResult] = await Promise.allSettled([
           Promise.resolve(analyzeContent(csabfInput, csabfMode)),
           cachedAnalysis?.faqData
             ? Promise.resolve(cachedAnalysis.faqData)
-            : (claudeKey ? discoverQuestions(pageData, 'claude', claudeKey).then(async (discovery) => {
+            : (claudeKey ? discoverQuestions(pageData, _ipType, claudeKey).then(async (discovery) => {
                 const gaps = analyzeGaps(discovery.questions || [], pageData.existingFAQs || []);
-                const prioritized = await prioritizeQuestions(gaps.gaps || [], pageData, 'claude', claudeKey);
+                const prioritized = await prioritizeQuestions(gaps.gaps || [], pageData, _ipType, claudeKey);
                 return { discovery, gaps, prioritized };
               }) : Promise.resolve(null)),
           cachedAnalysis?.fanoutData
             ? Promise.resolve(cachedAnalysis.fanoutData)
-            : (claudeKey ? generateFanoutQueries(topicStr, '', 12, 'claude') : Promise.resolve(null)),
-          claudeKey ? generateSemanticKeywords(pageData, 'claude', claudeKey) : Promise.resolve(null)
+            : (claudeKey ? generateFanoutQueries(topicStr, '', 12, _ipType) : Promise.resolve(null)),
+          claudeKey ? generateSemanticKeywords(pageData, _ipType, claudeKey) : Promise.resolve(null)
         ]);
 
         // Cache FAQ + fanout results
@@ -919,20 +951,20 @@ export async function executeTool(toolName, args, writerId = 'default', articleR
       const topicStr = (args.topic || '').toString().trim();
       if (!topicStr) return JSON.stringify({ error: 'Topic is required.' });
       try {
-        // Always use Claude for internal FAQ/keyword generation
-        const claudeKey = process.env.ANTHROPIC_API_KEY;
-        if (!claudeKey) return JSON.stringify({ error: 'ANTHROPIC_API_KEY not configured. Claude is required for content generation.' });
+        // Use Claude (primary) or OpenAI (fallback) for FAQ/keyword generation
+        const _ip = getInternalProvider();
+        if (!_ip) return JSON.stringify({ error: 'No AI API key configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY in .env' });
 
         const pageData = { url: null, title: topicStr, h1: topicStr, headings: [], paragraphs: [], existingFAQs: [], wordCount: 0, existingSchema: [], hasFAQSchema: false, summary: '' };
 
-        // Run discovery + prioritization + keywords + fanout in parallel using Claude
+        // Run discovery + prioritization + keywords + fanout in parallel
         const [discoverResult, fanoutResult, keywordsResult] = await Promise.allSettled([
-          discoverQuestions(pageData, 'claude', claudeKey).then(async (discovery) => {
-            const prioritized = await prioritizeQuestions(discovery.questions || [], pageData, 'claude', claudeKey);
+          discoverQuestions(pageData, _ip.type, _ip.apiKey).then(async (discovery) => {
+            const prioritized = await prioritizeQuestions(discovery.questions || [], pageData, _ip.type, _ip.apiKey);
             return { discovery, prioritized };
           }),
-          generateFanoutQueries(topicStr, args.domain || '', 12, 'claude'),
-          generateSemanticKeywords(pageData, 'claude', claudeKey)
+          generateFanoutQueries(topicStr, args.domain || '', 12, _ip.type),
+          generateSemanticKeywords(pageData, _ip.type, _ip.apiKey)
         ]);
 
         const discoverData = discoverResult.status === 'fulfilled' ? discoverResult.value : null;
@@ -1462,9 +1494,9 @@ Put 5-6 as high, 3-4 as medium. High = questions ChatGPT/Gemini would cite answe
       if (!topicStr) return JSON.stringify({ error: 'Topic is required to generate a framework.' });
 
       try {
-        // Always use Claude for all internal tool work
-        const claudeKey = process.env.ANTHROPIC_API_KEY;
-        if (!claudeKey) return JSON.stringify({ error: 'ANTHROPIC_API_KEY not configured. Claude is required for content generation.' });
+        // Use Claude (primary) or OpenAI (fallback) for all internal tool work
+        const _ip = getInternalProvider();
+        if (!_ip) return JSON.stringify({ error: 'No AI API key configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY in .env' });
 
         const contentType = args.content_type || 'educational';
         const additionalContext = args.additional_context || '';
@@ -1477,17 +1509,17 @@ Put 5-6 as high, 3-4 as medium. High = questions ChatGPT/Gemini would cite answe
         const faqPageData = { url: null, title: topicStr, h1: topicStr, headings: [], paragraphs: [], existingFAQs: [], wordCount: 0, existingSchema: [], hasFAQSchema: false, summary: '' };
 
         const parallelTasks = [
-          // FAQ discovery + prioritization using Claude (skip if cached)
+          // FAQ discovery + prioritization (skip if cached)
           cached?.faqData
             ? Promise.resolve(cached.faqData)
-            : discoverQuestions(faqPageData, 'claude', claudeKey).then(async (discovery) => {
-                const prioritized = await prioritizeQuestions(discovery.questions || [], faqPageData, 'claude', claudeKey);
+            : discoverQuestions(faqPageData, _ip.type, _ip.apiKey).then(async (discovery) => {
+                const prioritized = await prioritizeQuestions(discovery.questions || [], faqPageData, _ip.type, _ip.apiKey);
                 return { discovery, prioritized };
               }).catch(() => null),
-          // Fanout queries using Claude (skip if cached)
+          // Fanout queries (skip if cached)
           cached?.fanoutData
             ? Promise.resolve(cached.fanoutData)
-            : generateFanoutQueries(topicStr, '', 12, 'claude').catch(() => null),
+            : generateFanoutQueries(topicStr, '', 12, _ip.type).catch(() => null),
           // Published articles for internal linking
           getArticles({}).catch(() => []),
           // SharePoint product data
@@ -1894,8 +1926,8 @@ Output ONLY the Markdown framework + keywords section. No preamble, no commentar
       }
 
       try {
-        // Always use Claude for article editing
-        if (!process.env.ANTHROPIC_API_KEY) return JSON.stringify({ error: 'ANTHROPIC_API_KEY not configured. Claude is required for content generation.' });
+        // Use Claude (primary) or OpenAI (fallback) for article editing
+        if (!getInternalProvider()) return JSON.stringify({ error: 'No AI API key configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY in .env' });
 
         // Detect if the content is a framework/outline (headings + brief guides) vs a full article
         const lines = currentArticle.split('\n').filter(l => l.trim());
@@ -1996,8 +2028,8 @@ RULES:
       if (!topicStr) return JSON.stringify({ error: 'Topic is required to generate an article.' });
 
       try {
-        // Always use Claude for article generation
-        if (!process.env.ANTHROPIC_API_KEY) return JSON.stringify({ error: 'ANTHROPIC_API_KEY not configured. Claude is required for content generation.' });
+        // Use Claude (primary) or OpenAI (fallback) for article generation
+        if (!getInternalProvider()) return JSON.stringify({ error: 'No AI API key configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY in .env' });
 
         // Gather writer context
         const writerProfile = getWriterProfile(writerId);

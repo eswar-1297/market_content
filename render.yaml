@@ -4,6 +4,10 @@ services:
     runtime: node
     buildCommand: npm install && npm run build
     startCommand: npm start
+    disk:
+      name: copilot-data
+      mountPath: /opt/render/project/src/server/data
+      sizeGB: 1
     envVars:
       - key: NODE_ENV
         value: production
@@ -11,11 +15,19 @@ services:
         sync: false
       - key: GEMINI_API_KEY
         sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
       - key: YOUTUBE_API_KEY
         sync: false
       - key: GOOGLE_CSE_KEY
         sync: false
       - key: GOOGLE_CSE_CX
+        sync: false
+      - key: DATAFORSEO_LOGIN
+        sync: false
+      - key: DATAFORSEO_PASSWORD
+        sync: false
+      - key: SEMRUSH_API_KEY
         sync: false
       - key: BING_API_KEY
         sync: false
@@ -24,4 +36,30 @@ services:
       - key: ATP_API_KEY
         sync: false
       - key: RAPIDAPI_KEY
+        sync: false
+      - key: LANGFUSE_PUBLIC_KEY
+        sync: false
+      - key: LANGFUSE_SECRET_KEY
+        sync: false
+      - key: LANGFUSE_BASE_URL
+        sync: false
+      - key: COPYLEAKS_EMAIL
+        sync: false
+      - key: COPYLEAKS_API_KEY
+        sync: false
+      - key: MS_TENANT_ID
+        sync: false
+      - key: MS_CLIENT_ID
+        sync: false
+      - key: MS_CLIENT_SECRET
+        sync: false
+      - key: SHAREPOINT_HOST
+        sync: false
+      - key: SHAREPOINT_SITE
+        sync: false
+      - key: AUTH_TENANT_ID
+        sync: false
+      - key: AUTH_CLIENT_ID
+        sync: false
+      - key: SENDGRID_API_KEY
         sync: false

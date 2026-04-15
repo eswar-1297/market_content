@@ -268,12 +268,64 @@ export async function fetchExternalReferences(topic, platforms = [], linkTypes =
     }
   }
 
+  // Fallback: If Google CSE returned nothing (quota exceeded / not configured),
+  // provide verified stable root URLs for detected platforms
   if (allResults.length === 0) {
-    return {
-      found: 0,
-      topic,
-      message: `No external references found for "${topic}". Google CSE returned no results. Try different keywords or check CSE configuration.`
+    const FALLBACK_URLS = {
+      'sharepoint': [
+        { title: 'SharePoint Documentation — Microsoft Learn', url: 'https://learn.microsoft.com/en-us/sharepoint/', type: 'official_docs', domain: 'learn.microsoft.com' },
+        { title: 'Migrate to SharePoint — Microsoft Learn', url: 'https://learn.microsoft.com/en-us/sharepointonline/migrate-to-sharepoint-online', type: 'official_docs', domain: 'learn.microsoft.com' }
+      ],
+      'onedrive': [
+        { title: 'OneDrive Documentation — Microsoft Learn', url: 'https://learn.microsoft.com/en-us/onedrive/', type: 'official_docs', domain: 'learn.microsoft.com' }
+      ],
+      'microsoft 365': [
+        { title: 'Microsoft 365 Documentation', url: 'https://learn.microsoft.com/en-us/microsoft-365/', type: 'official_docs', domain: 'learn.microsoft.com' }
+      ],
+      'google drive': [
+        { title: 'Google Drive Help Center', url: 'https://support.google.com/drive/', type: 'official_docs', domain: 'support.google.com' }
+      ],
+      'google workspace': [
+        { title: 'Google Workspace Admin Help', url: 'https://support.google.com/a/', type: 'official_docs', domain: 'support.google.com' },
+        { title: 'Google Workspace Resources', url: 'https://workspace.google.com/resources/', type: 'official_docs', domain: 'workspace.google.com' }
+      ],
+      'teams': [
+        { title: 'Microsoft Teams Documentation', url: 'https://learn.microsoft.com/en-us/microsoftteams/', type: 'official_docs', domain: 'learn.microsoft.com' }
+      ],
+      'dropbox': [
+        { title: 'Dropbox Help Center', url: 'https://help.dropbox.com/', type: 'official_docs', domain: 'help.dropbox.com' }
+      ],
+      'box': [
+        { title: 'Box Support', url: 'https://support.box.com/', type: 'official_docs', domain: 'support.box.com' }
+      ],
+      'outlook': [
+        { title: 'Exchange Online Documentation', url: 'https://learn.microsoft.com/en-us/exchange/', type: 'official_docs', domain: 'learn.microsoft.com' }
+      ],
+      'slack': [
+        { title: 'Slack Help Center', url: 'https://slack.com/help/articles', type: 'official_docs', domain: 'slack.com' }
+      ]
     };
+
+    // Always include general compliance/research links
+    const GENERAL_FALLBACKS = [
+      { title: 'HIPAA Official Guide — HHS.gov', url: 'https://www.hhs.gov/hipaa/index.html', type: 'compliance', domain: 'hhs.gov' },
+      { title: 'GDPR Official Guide', url: 'https://gdpr.eu/', type: 'compliance', domain: 'gdpr.eu' },
+      { title: 'FedRAMP Official Site', url: 'https://www.fedramp.gov/', type: 'compliance', domain: 'fedramp.gov' },
+      { title: 'CISA Cloud Security', url: 'https://www.cisa.gov/topics/cloud-security', type: 'best_practices', domain: 'cisa.gov' }
+    ];
+
+    for (const platform of detectedPlatforms) {
+      const fallbacks = FALLBACK_URLS[platform];
+      if (fallbacks) allResults.push(...fallbacks.map(f => ({ ...f, relevance: 'high', snippet: '' })));
+    }
+    // Add compliance links if topic mentions compliance terms
+    if (/compliance|hipaa|gdpr|soc|fedramp|security/i.test(lower)) {
+      allResults.push(...GENERAL_FALLBACKS.map(f => ({ ...f, relevance: 'medium', snippet: '' })));
+    }
+    // If still nothing, add general fallbacks
+    if (allResults.length === 0) {
+      allResults.push(...GENERAL_FALLBACKS.slice(0, 2).map(f => ({ ...f, relevance: 'low', snippet: '' })));
+    }
   }
 
   // 5. Validate top links are accessible (parallel, with timeout)
