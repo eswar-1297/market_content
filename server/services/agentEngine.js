@@ -455,13 +455,13 @@ export const AGENT_TOOLS_OPENAI = [
     type: 'function',
     function: {
       name: 'fetch_external_references',
-      description: "Fetch relevant external reference links from credible, authoritative sites for a blog topic. Returns links from official platform documentation (Microsoft Learn, Google Workspace docs), industry research (Gartner, Forrester, IDC), and authoritative sources. Use this when the writer asks for external links, reference links, credible sources, or when building a framework/article that needs authoritative citations. Also provides original information from official platform sites when the article focuses on a specific platform (e.g., SharePoint, Google Drive, OneDrive).",
+      description: "Fetch external reference links and statistics from authoritative sources for a blog topic. ALWAYS use this tool when the writer asks for: Gartner data, Gartner page, Gartner statistics, Forrester research, IDC report, industry statistics, market research, research data, credible sources, external links, official documentation, or any stats/data to back up the article. Returns public Gartner pages (newsroom, SmarterwithGartner, press releases), Forrester, IDC, Statista, Microsoft Learn, Google Workspace docs, compliance sites (HHS, GDPR, FedRAMP). Pass link_types=['research'] when the writer specifically asks for Gartner, statistics, or research data.",
       parameters: {
         type: 'object',
         properties: {
           topic: { type: 'string', description: 'The blog topic to find external references for' },
           platforms: { type: 'array', items: { type: 'string' }, description: 'Specific platforms to find official docs for (e.g., ["Microsoft 365", "SharePoint", "Google Workspace"])' },
-          link_types: { type: 'array', items: { type: 'string', enum: ['official_docs', 'research', 'industry_reports', 'best_practices', 'compliance'] }, description: 'Types of links to prioritize. Defaults to all types.' }
+          link_types: { type: 'array', items: { type: 'string', enum: ['official_docs', 'research', 'industry_reports', 'best_practices', 'compliance'] }, description: 'Types of links to fetch. Pass ["research"] when user asks for Gartner, statistics, or research data specifically.' }
         },
         required: ['topic']
       }
@@ -1609,7 +1609,7 @@ Put 5-6 as high, 3-4 as medium. High = questions ChatGPT/Gemini would cite answe
           return scoreB - scoreA;
         });
 
-        // Build the FAQ + fanout context for the AI prompt
+        // Build the FAQ + fanout context for the AI prompt — these go to the FAQ section ONLY, not H2 headings
         let faqFanoutContext = '';
         if (allFaqItems.length > 0) {
           const topQuestions = allFaqItems.slice(0, 15);
@@ -1620,27 +1620,16 @@ Put 5-6 as high, 3-4 as medium. High = questions ChatGPT/Gemini would cite answe
 
           faqFanoutContext = `
 
-REAL USER QUESTIONS & AI SEARCH SUB-QUERIES — USE THESE FOR H2/H3 HEADINGS:
-The following questions come from two sources:
-1. FAQ Pipeline: Real questions people ask on Google (People Also Ask), Reddit, Quora, and search autocomplete
-2. Fanout Queries: The exact sub-queries that AI search engines (ChatGPT, Gemini, Perplexity) decompose internally when answering this topic
+RESEARCHED USER QUESTIONS — FOR FAQ SECTION ONLY (do NOT use as H2 body headings):
+The following questions come from real search data (Google PAA, Reddit, Quora) and AI engine fanout decomposition.
+These are reserved EXCLUSIVELY for the "Frequently Asked Questions" section at the bottom of the article.
+Do NOT turn these into H2 body section headings — the body H2s must come from your own deep technical analysis of the topic.
 
-These represent ACTUAL search demand and AI engine behavior. Using them as H2/H3 headings dramatically increases the chance of being cited by AI search engines.
-
-QUESTIONS (ranked by priority — higher = more search demand + AI relevance):
-${questionLines}
-
-HOW TO USE THESE IN YOUR FRAMEWORK:
-- USE the best 3-5 high-priority questions as H2 body section headings (reword slightly if needed for flow, but keep the core question intact)
-- USE 2-4 more as H3 sub-section headings under relevant H2s
-- The remaining questions that you do NOT use as headings will be listed as suggested FAQs after the framework
-- Questions marked "FAQ+Fanout (HIGH PRIORITY)" appear in BOTH real user searches AND AI engine decompositions — these are the highest-value headings
-- Fanout category questions show how AI engines break down the topic — structure your article to match this decomposition
-- You can combine or rephrase similar questions into a single heading, but preserve the search intent
-- Do NOT use ALL questions as headings — select the most impactful ones that create a logical article flow`;
+QUESTIONS (inject the top 7-10 into the FAQ section after the framework is built):
+${questionLines}`;
         }
 
-        // Build the fanout categories summary for structural guidance
+        // Build the fanout categories summary — for awareness only, NOT to dictate H2s
         let fanoutStructureHint = '';
         if (fanoutData?.fanouts?.length > 0) {
           const categories = {};
@@ -1654,14 +1643,28 @@ HOW TO USE THESE IN YOUR FRAMEWORK:
             const catLines = Object.entries(categories).map(([cat, qs]) => `- **${cat}**: ${qs.slice(0, 3).join('; ')}`).join('\n');
             fanoutStructureHint = `
 
-AI ENGINE TOPIC DECOMPOSITION — How AI search engines break down "${topicStr}":
-${catLines}
-Structure your article sections to cover these categories. This ensures your article matches the way AI engines understand and decompose this topic.`;
+AI ENGINE TOPIC DECOMPOSITION (awareness only — use as a coverage checklist, NOT as H2 source):
+These are the sub-topics AI search engines decompose "${topicStr}" into. Ensure your technically-generated H2s cover these dimensions — but write your own expert headings, don't copy these verbatim:
+${catLines}`;
           }
         }
 
         // ═══ PHASE 3: Generate framework with AI, now enriched with FAQ + fanout data ═══
-        const frameworkPrompt = `Generate a detailed, TOPIC-SPECIFIC GEO-optimized article framework/outline for the topic below. This framework will be inserted into the writer's editor as a starting structure. GEO = Generative Engine Optimization — structuring content so AI search engines (ChatGPT, Gemini, Perplexity, Google AI Overviews) cite and quote it.
+        const frameworkPrompt = `Generate a detailed, TOPIC-SPECIFIC article framework/outline for the topic below. This framework will be inserted into the writer's editor as a starting structure.
+
+THIS FRAMEWORK SERVES TWO NON-NEGOTIABLE GOALS — every structural decision must serve both:
+
+GOAL 1 — AI SEARCH ENGINE VISIBILITY (GEO):
+Get this article cited and quoted by ChatGPT, Perplexity, Gemini, Google AI Overviews, and Bing Copilot.
+This means: each section must be independently quotable, definition-first, data-anchored, and entity-rich.
+AI engines rank and cite articles that are the most authoritative, specific, and information-dense on a topic.
+
+GOAL 2 — CUSTOMER ACQUISITION:
+Attract CIOs, IT Directors, and IT Managers at 500+ employee enterprises who are evaluating or planning cloud migrations or SaaS governance.
+Every section should address a real pain point, decision concern, or knowledge gap that moves an enterprise buyer closer to choosing CloudFuze.
+The article should make the reader feel: "This is the definitive resource. CloudFuze clearly understands my problem."
+
+Both goals reinforce each other: the more authoritative and specific the content, the more AI engines cite it AND the more buyers trust it.
 
 TOPIC-SPECIFIC FRAMEWORK RULES — CRITICAL:
 - The framework MUST be deeply specific to the exact topic — NOT a generic template.
@@ -1671,9 +1674,9 @@ TOPIC-SPECIFIC FRAMEWORK RULES — CRITICAL:
   - If the topic involves a specific platform (SharePoint, OneDrive, Google Drive, etc.): Include platform-specific details, limitations, and how CloudFuze bridges gaps.
   - If the topic involves compliance (SOC 2, HIPAA, GDPR): Focus on how CloudFuze ensures compliant data handling during operations.
   - If the topic involves M&A, tenant consolidation, or org restructuring: Focus on tenant-to-tenant migration and user mapping.
-- Each H2 section heading MUST be directly relevant to the specific topic — do NOT use generic headings like "Key Benefits" or "Best Practices" without making them topic-specific (e.g., "Key Benefits of Google Drive to SharePoint Migration for Enterprise IT Teams").
+- Each H2 section heading MUST be directly relevant to the specific topic — do NOT use generic headings like "Key Benefits" or "Best Practices" without making them topic-specific.
 - Include TOPIC-SPECIFIC visual suggestions (not generic). If the topic is about SharePoint migration, suggest a SharePoint permission mapping diagram, not a generic "migration flowchart."
-- Include at least ONE section that provides ORIGINAL INFORMATION from official platform documentation (e.g., Microsoft Learn, Google Workspace docs). The writing guide for this section should specify exact official docs to reference.
+- Include at least ONE section with ORIGINAL INFORMATION from official platform documentation (e.g., Microsoft Learn, Google Workspace docs). The writing guide for this section should specify exact official docs to reference.
 
 ${ICP_FRAMEWORK}
 
@@ -1699,8 +1702,8 @@ OUTPUT FORMAT — Write the framework in clean Markdown with the following struc
 - A brief 1-2 sentence description under each heading explaining what to write in that section
 - Use H2 for main sections and H3 for sub-sections
 - Include these CSABF-required sections IN THIS ORDER: Introduction, Key Takeaways, 4-6 body H2 sections, "How CloudFuze Helps" or "How CloudFuze Simplifies [Topic]" (include a soft CTA at the end of this section), Frequently Asked Questions (leave this section EMPTY — just the H2 heading and a note saying "FAQs will be populated from research data below"). FAQs are the LAST section — NO separate Conclusion after FAQs.
-- Each heading should be written as a question or action phrase that targets AI search queries
-- Under each heading, write a brief italic guide: *Write 100-150 words covering X, Y, Z...*
+- Each body H2 heading should be a technically authoritative, expert-authored title that an IT Director would find immediately valuable — NOT a generic FAQ-style question
+- Under each heading, write a brief italic guide that covers: (1) what to write, (2) which buyer pain point this addresses, (3) what statistic or data to include and its source, (4) what entities to name explicitly, (5) how this section advances the buyer toward CloudFuze. Format: *Write 120-160 words. Open with a definition or direct answer. Pain point: [specific pain]. Stat: [specific data + source]. Mention: [specific entity names]. Buyer signal: [what this moves the reader toward deciding].*
 - INLINE VISUAL SUGGESTIONS (MANDATORY for 3-6 sections): Right after the italic guide for a section, if that section benefits from a visual element, add a line starting with the emoji for the element type. The suggestion MUST be specific — describe exactly what to create. Do NOT create a separate visuals summary section — visuals go INLINE under the section they belong to.
 
   Format — place directly under the italic writing guide of the relevant section:
@@ -1735,17 +1738,36 @@ OUTPUT FORMAT — Write the framework in clean Markdown with the following struc
   - The CloudFuze section benefits from a product screenshot or diagram
   - Be SPECIFIC — describe exact table columns, image subjects, infographic data points, diagram flows
   - Do NOT create a separate "Suggested Visuals" section at the bottom — ALL visual suggestions must be inline under their section
-- CRITICAL: Your body H2 and H3 headings MUST be derived from the FAQ + Fanout questions provided above. Use the highest-priority questions as headings (rephrase for flow if needed). This ensures the article structure matches real search demand and AI engine topic decomposition.
+- CRITICAL — H2 HEADING STRATEGY: Your body H2s must be original, expert-authored headings that serve BOTH goals simultaneously:
+  • For AI visibility: Each H2 must be a self-contained citation target — specific enough that an AI engine can extract the section alone and it makes sense. Use entity-rich language (exact platform names, protocols, standards, product features).
+  • For customer acquisition: Each H2 must address a real pain point, decision milestone, or knowledge gap in the enterprise IT buyer's journey. A CIO or IT Director reading the heading should think "yes, that's exactly what I need to know."
+  • Do NOT copy FAQ/Fanout questions as H2s — those go in the FAQ section only.
+  • Ask yourself: "If an IT Director at a 1000-person company is evaluating this topic, what are the 5-7 things they MUST understand before making a decision?" Those are your H2s.
+  • WEAK H2: "Benefits of Cloud Migration" — STRONG H2: "Permission Inheritance, Metadata Fidelity, and Delta Sync: What Enterprise IT Teams Lose Without a Dedicated Migration Tool"
+  • Each H2 should make the article feel like the most thorough, expert resource on this topic — something that would be cited in an RFP, shared by an IT Director with their team, AND extracted verbatim by Perplexity or ChatGPT.
 
-GEO OPTIMIZATION RULES FOR FRAMEWORK DESIGN:
-- Body H2s MUST read like questions someone would type into ChatGPT, Perplexity, or Google — USE the FAQ and Fanout questions provided above as your primary source for H2/H3 headings
-- Include at least ONE comparison or "vs" section if the topic involves alternatives (AI Overviews loves tables)
-- Include a "Key Takeaways" section right after intro — Perplexity and ChatGPT frequently extract bullet-point summaries. Each takeaway MUST be a SHORT sentence (max 15 words). Crisp, actionable, specific. No long explanations.
-- Plan for SELF-CONTAINED answer blocks under each H2 — each section should be independently quotable by AI engines (50-200 words per answer block)
-- Include placeholder for at least 1 data table or comparison chart — Google AIO and Perplexity extract tables directly
-- Plan for E-E-A-T signals: suggest where to include case studies (Experience), technical details (Expertise), CloudFuze credentials (Authority), and verifiable facts (Trust)
-- Include a "How CloudFuze Helps" section with relevant feature suggestions
-- Include a "Frequently Asked Questions" H2 section but leave it EMPTY (just write: *FAQs will be auto-populated from researched questions below.*). The system will inject real researched FAQ questions into this section after generation — do NOT write your own FAQ questions
+GEO + CONVERSION RULES FOR FRAMEWORK DESIGN:
+
+AI VISIBILITY (GEO) — How to structure for maximum AI citation:
+- SELF-CONTAINED SECTIONS: Every body H2 section must be independently quotable. In the writing guide, instruct the writer to open each section with a definition or direct answer ("[Topic] is..." or "The key difference between X and Y is...") — AI engines extract the first 1-3 sentences of a section most often.
+- STATISTICS ARE MANDATORY: Every body section guide MUST suggest at least one specific, sourced statistic (Gartner, Forrester, IDC, Microsoft, Google). Data boosts AI citation likelihood by 40%.
+- ENTITY DENSITY: In every section guide, name specific platforms, protocols, standards, and product features explicitly. Never write "the tool" or "the platform" — always name "SharePoint", "Microsoft 365", "CloudFuze Migrate", "OAuth 2.0", etc.
+- TABLES + LISTS: Every comparison or multi-item section MUST have a table or bullet list — Google AIO and Perplexity extract these directly into AI responses.
+- CITATION SWEET SPOT: Plan each body section for 120-160 words — this is the range AI engines most frequently extract as a citation block.
+- Key Takeaways section (right after intro): Perplexity and ChatGPT extract bullet summaries. Each takeaway MAX 15 words, crisp, specific. No explanations.
+- ORIGINAL ANGLE: At least one section should include information not available in generic articles — a specific limitation, edge case, or technical constraint that only an expert would document.
+
+CUSTOMER ACQUISITION — How to structure for buyer conversion:
+- BUYER JOURNEY MAPPING: Order your H2s to mirror the enterprise IT buyer's decision journey:
+  1. Problem/risk section (Awareness) — quantify what's at stake: data loss risk, compliance exposure, productivity cost, downtime
+  2. Technical depth sections (Consideration) — cover the mechanisms, options, tradeoffs that an IT evaluator needs to assess solutions
+  3. Solution criteria section (Decision) — what to look for in a tool/approach; CloudFuze naturally fits these criteria
+  4. CloudFuze section (Conversion) — specific features, proof points, CTA
+- PAIN POINT LANGUAGE: In the writing guide for each section, name the specific pain a CIO/IT Director feels — "risk of permission loss during migration", "shadow IT sprawl across 40+ SaaS apps", "audit failures from incomplete user offboarding"
+- PROOF POINTS: Suggest where to include CloudFuze-specific credibility signals — customer scale ("migrated 500K+ users"), accuracy ("99.9% data fidelity"), speed ("70% faster than manual"), compliance ("SOC 2 Type II, HIPAA, GDPR ready")
+- E-E-A-T SIGNALS: Suggest where to include Experience (case example), Expertise (technical depth), Authority (CloudFuze credentials + customer scale), Trust (verifiable data, official source citations)
+- CLOUDFUZE SECTION — CONVERSION FOCUS: The "How CloudFuze Helps" section writing guide must: (a) name specific product features relevant to this topic, (b) include at least one measurable outcome ("reduces migration time by X%"), (c) end with a soft but direct CTA ("Ready to migrate? Talk to a CloudFuze specialist.")
+- Include a "Frequently Asked Questions" H2 section but leave it EMPTY (write: *FAQs will be auto-populated from researched questions below.*). The system injects real researched FAQ questions after generation — do NOT write your own.
 - Do NOT include a separate "Conclusion" H2 — CloudFuze blogs end with the CloudFuze section + FAQs + a soft CTA paragraph
 
 MANDATORY CREDIBLE STATISTIC — EVERY FRAMEWORK MUST INCLUDE:
@@ -1757,10 +1779,11 @@ MANDATORY CREDIBLE STATISTIC — EVERY FRAMEWORK MUST INCLUDE:
 
 ADDITIONAL RULES:
 - Framework should have 10-14 sections total (including H1, intro, CloudFuze section, FAQs, and closing CTA — NO separate "Conclusion" H2)
-- Suggest where to embed CloudFuze mentions naturally (aim for 8-12 across the article)
-- In the brief guide for each section, suggest what data or sources to cite (e.g., *"Include a migration success statistic — cite Gartner or IDC research. Link to Microsoft SharePoint docs for technical accuracy. Reference CloudFuze SharePoint data for product claims."*)
+- Suggest where to embed CloudFuze mentions naturally (aim for 8-12 across the article). Each mention should be a specific capability claim, not a vague reference.
+- The article must feel like the definitive resource on this topic — something a buyer would bookmark, share with their team, and return to during their evaluation. Every section should add information that a generic AI summary would miss.
 - Do NOT write actual article content — only headings and brief guides
 - Do NOT include meta title/description — this is just the structure
+- CONVERSION FLOW CHECK: Before finalizing the framework, verify: (a) At least one early section creates urgency or quantifies the problem, (b) At least two mid sections demonstrate deep expertise that builds trust, (c) The CloudFuze section connects specific product features to the exact pain points raised in earlier sections, (d) The FAQ section will address the decision-stage questions buyers ask right before choosing a vendor
 
 SEMANTIC KEYWORDS — INCLUDE AT THE BOTTOM OF THE FRAMEWORK:
 After the last section (FAQs / soft CTA), add a "---" divider and then a "## 📌 Semantic Keywords" section with the following sub-sections:
@@ -1776,7 +1799,11 @@ REMINDER: Visual suggestions (📊 Table, 🖼 Image, 🎨 Infographic, 🔀 Dia
 Output ONLY the Markdown framework + keywords section. No preamble, no commentary.`;
 
         // Always use Claude for framework content generation (regardless of user-selected chat model)
-        const frameworkSystemPrompt = 'You are an expert content strategist. Generate article frameworks optimized for AI search engine visibility. You MUST use the provided FAQ and Fanout questions as H2/H3 headings in your framework. For 3-6 sections, you MUST add INLINE visual suggestions (📊 Table, 🖼 Image, 🎨 Infographic, 🔀 Diagram, 📈 Stats, 📸 Screenshot) directly under each section writing guide — with specific descriptions of what to create. EVERY Image, Infographic, Diagram, and Screenshot MUST include an alt-text suggestion with the primary keyword. Do NOT put visuals in a separate section.';
+        const frameworkSystemPrompt = `You are a senior technical content strategist who specializes in enterprise IT content that achieves two goals simultaneously: (1) maximum AI search engine citation — getting quoted by ChatGPT, Perplexity, Gemini, and Google AI Overviews; and (2) enterprise customer acquisition — attracting CIOs and IT Directors who are evaluating cloud migration or SaaS governance solutions and moving them toward CloudFuze.
+
+Every framework decision — H2 choice, section order, writing guide instructions — must serve both goals. Your H2s are expert-authored, technically authoritative chapter titles that an IT Director would find immediately valuable AND that AI engines would extract as citation-worthy blocks. Each section writing guide tells the writer exactly: what pain point to address, what statistic to include and from where, what entities to name, and how this section moves the buyer toward CloudFuze.
+
+The FAQ/Fanout questions provided are ONLY for the FAQ section at the bottom — never use them as H2 body headings. For 3-6 sections, you MUST add INLINE visual suggestions (📊 Table, 🖼 Image, 🎨 Infographic, 🔀 Diagram, 📈 Stats, 📸 Screenshot) directly under each section writing guide. EVERY Image, Infographic, Diagram, and Screenshot MUST include an alt-text suggestion with the primary keyword. Do NOT put visuals in a separate section.`;
         let frameworkContent = await callClaude(frameworkSystemPrompt, frameworkPrompt, { maxTokens: 6000, temperature: 0.4, timeout: 60000 });
 
         // ═══ PHASE 4: Post-process — clean up, find leftover FAQs, append links ═══
@@ -2220,9 +2247,21 @@ RULES:
 
 // ═══ ARTICLE GENERATION PROMPT ═══
 
-const ARTICLE_GEN_SYSTEM_PROMPT = `You are an expert content writer specializing in GEO (Generative Engine Optimization) — writing articles that AI search engines cite, quote, and recommend. You write for CloudFuze — an enterprise cloud migration platform. Your articles get cited by ChatGPT, Gemini, Perplexity, Google AI Overviews, and Bing Copilot.
+const ARTICLE_GEN_SYSTEM_PROMPT = `You are an expert content writer who achieves two goals in every article:
 
-KEY GEO INSIGHT: GEO-optimized content achieves 30-115% higher visibility in AI-generated responses. Only 11% of domains are cited by BOTH ChatGPT and Google AI Overviews for the same query — your job is to write content that gets cited across ALL platforms.
+GOAL 1 — AI SEARCH ENGINE VISIBILITY (GEO):
+Write articles that ChatGPT, Gemini, Perplexity, Google AI Overviews, and Bing Copilot cite, quote, and recommend.
+GEO-optimized content achieves 30-115% higher visibility in AI responses. Only 11% of domains are cited by both ChatGPT and Google AIO for the same query — your job is to be in that 11% across ALL platforms.
+How: definition-first sections, sourced statistics, entity-rich language, self-contained answer blocks (120-160 words), tables and bullet lists that AI engines extract directly.
+
+GOAL 2 — ENTERPRISE CUSTOMER ACQUISITION:
+Every article must move CIOs, IT Directors, and IT Managers at 500+ employee companies closer to choosing CloudFuze.
+How: open each section with the buyer's pain point before the solution, build trust through technical depth and specificity, weave CloudFuze features into the second half naturally, close with a clear but soft CTA.
+The reader should finish thinking: "CloudFuze clearly understands this problem, and they're the expert I should talk to."
+
+Both goals reinforce each other: the more specific and authoritative the content, the more AI engines cite it AND the more enterprise buyers trust it. Never sacrifice one goal for the other.
+
+You write for CloudFuze — an enterprise cloud migration and SaaS management platform.
 
 ${ICP_FRAMEWORK}
 
@@ -2295,6 +2334,13 @@ E-E-A-T SIGNALS (Experience, Expertise, Authoritativeness, Trustworthiness):
 - EXPERTISE: Show technical depth — mention specific protocols, APIs, compliance standards (SOC 2, GDPR, HIPAA)
 - AUTHORITATIVENESS: Reference CloudFuze's track record, G2/Gartner ratings, enterprise customer base
 - TRUSTWORTHINESS: Be transparent about limitations, provide accurate technical details, cite verifiable facts
+
+BUYER JOURNEY STRUCTURE — MANDATORY:
+- First body H2(s): Establish the problem and its real cost. Quantify the risk — data loss, downtime, compliance failure, productivity drain. Make the reader feel the urgency before presenting solutions.
+- Middle body H2(s): Go deep on the technical mechanisms, tradeoffs, and evaluation criteria. This is where you demonstrate expertise. A reader should finish these sections thinking "now I know exactly what to look for in a solution."
+- Second-to-last body H2: Frame solution criteria around what CloudFuze specifically does well — without naming it yet. Build the criteria so CloudFuze is the obvious fit.
+- "How CloudFuze Helps" section: Name specific product features and measurable outcomes that match the criteria you built above. This is the conversion section — be specific, not vague. End with a soft but clear CTA.
+- FAQ section: Address the final decision-stage questions buyers ask right before choosing a vendor.
 
 CONTENT ORIGINALITY — CRITICAL:
 - Every article MUST be 100% AI-original writing. Do NOT copy, paraphrase, rephrase, or reuse text from any past CloudFuze blog articles.
@@ -2493,6 +2539,18 @@ OUTPUT FORMAT:
 
 function buildArticleGenPrompt(params) {
   const parts = [];
+
+  parts.push(`THIS ARTICLE MUST ACHIEVE TWO GOALS SIMULTANEOUSLY:
+
+GOAL 1 — AI SEARCH ENGINE VISIBILITY:
+Get cited and quoted by ChatGPT, Perplexity, Gemini, Google AI Overviews, and Bing Copilot.
+Rules: Each section must open with a definition or direct answer. Include at least one specific, sourced statistic per section. Name entities explicitly — never use "it", "the tool", "this platform". Each H2 section should be independently quotable (120-160 words is the AI citation sweet spot). Tables and bullet lists are extracted directly by AI engines — include at least 2 bullet lists and 1 numbered list.
+
+GOAL 2 — ENTERPRISE CUSTOMER ACQUISITION:
+Attract and convert CIOs, IT Directors, and IT Managers at 500+ employee enterprises.
+Rules: Address real buyer pain points (data loss risk, compliance exposure, downtime, shadow IT). Build credibility through technical depth and specificity. Naturally position CloudFuze as the solution in the second half. End with a soft but clear CTA. Every section should leave the reader thinking "CloudFuze clearly understands this problem."
+
+Both goals reinforce each other: authoritative, specific content is both more citable by AI engines AND more trusted by enterprise buyers.`);
 
   parts.push(`TOPIC: "${params.topic}" — This is just the topic name, NOT the H1. You must create a Core ICP-targeted H1 (targeting CIOs/IT Directors at 500+ employee companies, US-based, using M365/GWS). Include enterprise scale language, buyer persona signal, and platform names. Do NOT use this raw topic as the H1.`);
   parts.push(`CONTENT TYPE: ${params.contentType}`);

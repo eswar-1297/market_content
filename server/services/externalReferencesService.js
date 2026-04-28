@@ -172,6 +172,10 @@ function detectComplianceNeeds(topic) {
 export async function fetchExternalReferences(topic, platforms = [], linkTypes = []) {
   const lower = topic.toLowerCase();
 
+  // Flag: writer explicitly asked for research/Gartner
+  const researchFocused = linkTypes.includes('research') ||
+    /gartner|forrester|idc|statista|research|statistics|stat|market\s*data|industry\s*report/i.test(topic);
+
   // 1. Detect platforms from topic + explicit args
   const detectedPlatforms = [
     ...new Set([
@@ -199,10 +203,30 @@ export async function fetchExternalReferences(topic, platforms = [], linkTypes =
     });
   }
 
-  // Research/industry searches
-  const researchQuery = `${topic} enterprise statistics research`;
+  // ── Research / statistics searches ────────────────────────────────────────
+  // Gartner: most content is paywalled — target the PUBLIC sections only:
+  //   gartner.com/en/newsroom          → press releases with real stats
+  //   gartner.com/smarterwithgartner   → free insight articles
+  //   gartner.com/en/information-technology → public IT trend pages
   searchQueries.push({
-    query: `site:gartner.com OR site:forrester.com OR site:statista.com ${topic}`,
+    query: `site:gartner.com/en/newsroom ${topic}`,
+    type: 'research',
+    site: 'gartner.com'
+  });
+  searchQueries.push({
+    query: `site:gartner.com/smarterwithgartner ${topic}`,
+    type: 'research',
+    site: 'gartner.com'
+  });
+  // Forrester, IDC, Statista — more open than Gartner
+  searchQueries.push({
+    query: `site:forrester.com OR site:idc.com OR site:statista.com ${topic} statistics`,
+    type: 'research',
+    site: 'research'
+  });
+  // McKinsey and industry blogs — mostly free
+  searchQueries.push({
+    query: `site:mckinsey.com OR site:flexera.com ${topic} cloud report`,
     type: 'research',
     site: 'research'
   });
@@ -311,7 +335,16 @@ export async function fetchExternalReferences(topic, platforms = [], linkTypes =
       { title: 'HIPAA Official Guide — HHS.gov', url: 'https://www.hhs.gov/hipaa/index.html', type: 'compliance', domain: 'hhs.gov' },
       { title: 'GDPR Official Guide', url: 'https://gdpr.eu/', type: 'compliance', domain: 'gdpr.eu' },
       { title: 'FedRAMP Official Site', url: 'https://www.fedramp.gov/', type: 'compliance', domain: 'fedramp.gov' },
-      { title: 'CISA Cloud Security', url: 'https://www.cisa.gov/topics/cloud-security', type: 'best_practices', domain: 'cisa.gov' }
+      { title: 'CISA Cloud Security', url: 'https://www.cisa.gov/topics/cloud-security', type: 'best_practices', domain: 'cisa.gov' },
+      // Public Gartner pages (no paywall)
+      { title: 'Gartner Newsroom — IT & Cloud Research', url: 'https://www.gartner.com/en/newsroom', type: 'research', domain: 'gartner.com' },
+      { title: 'Gartner: Cloud Computing Insights', url: 'https://www.gartner.com/en/information-technology/insights/cloud-computing', type: 'research', domain: 'gartner.com' },
+      { title: 'Gartner SmarterwithGartner — IT Articles', url: 'https://www.gartner.com/smarterwithgartner/', type: 'research', domain: 'gartner.com' },
+      // Forrester & IDC (partially free)
+      { title: 'Forrester Research — Cloud & Technology', url: 'https://www.forrester.com/research/cloud/', type: 'research', domain: 'forrester.com' },
+      { title: 'IDC: Cloud Services Research', url: 'https://www.idc.com/research/cloud', type: 'research', domain: 'idc.com' },
+      { title: 'Statista: Cloud Computing Statistics', url: 'https://www.statista.com/topics/1695/cloud-computing/', type: 'research', domain: 'statista.com' },
+      { title: 'Flexera State of the Cloud Report', url: 'https://www.flexera.com/blog/cloud/cloud-computing-trends-state-of-the-cloud-report/', type: 'research', domain: 'flexera.com' }
     ];
 
     for (const platform of detectedPlatforms) {
@@ -320,16 +353,25 @@ export async function fetchExternalReferences(topic, platforms = [], linkTypes =
     }
     // Add compliance links if topic mentions compliance terms
     if (/compliance|hipaa|gdpr|soc|fedramp|security/i.test(lower)) {
-      allResults.push(...GENERAL_FALLBACKS.map(f => ({ ...f, relevance: 'medium', snippet: '' })));
+      allResults.push(...GENERAL_FALLBACKS.filter(f => f.type === 'compliance').map(f => ({ ...f, relevance: 'medium', snippet: '' })));
     }
-    // If still nothing, add general fallbacks
+    // Always include Gartner + research fallbacks
+    allResults.push(...GENERAL_FALLBACKS.filter(f => f.type === 'research').map(f => ({ ...f, relevance: 'medium', snippet: '' })));
+    // If still nothing at all, add everything
     if (allResults.length === 0) {
-      allResults.push(...GENERAL_FALLBACKS.slice(0, 2).map(f => ({ ...f, relevance: 'low', snippet: '' })));
+      allResults.push(...GENERAL_FALLBACKS.map(f => ({ ...f, relevance: 'low', snippet: '' })));
     }
   }
 
+  // When research was explicitly requested, move Gartner/Forrester/IDC results to the top
+  if (researchFocused) {
+    const researchLinks = allResults.filter(l => l.type === 'research');
+    const otherLinks    = allResults.filter(l => l.type !== 'research');
+    allResults.splice(0, allResults.length, ...researchLinks, ...otherLinks);
+  }
+
   // 5. Validate top links are accessible (parallel, with timeout)
-  const topLinks = allResults.slice(0, 12);
+  const topLinks = allResults.slice(0, 14); // increased from 12 to ensure research links survive
   const validationResults = await Promise.allSettled(
     topLinks.map(link =>
       validateUrl(link.url)

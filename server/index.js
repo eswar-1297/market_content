@@ -117,14 +117,21 @@ const server = app.listen(PORT, () => {
 // Graceful shutdown
 function shutdown(signal) {
   console.log(`\n${signal} received. Shutting down gracefully...`);
-  server.close(() => {
+  server.close(async () => {
     console.log('Server closed.');
+    try {
+      const { flushLangfuse } = await import('./services/langfuseService.js');
+      await flushLangfuse();
+      console.log('[Langfuse] Traces flushed before exit.');
+    } catch (e) {
+      console.warn('[Langfuse] Flush on shutdown failed:', e.message);
+    }
     process.exit(0);
   });
   setTimeout(() => {
     console.error('Forced shutdown after timeout.');
     process.exit(1);
-  }, 5000);
+  }, 8000);
 }
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
