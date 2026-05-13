@@ -2,8 +2,9 @@ services:
   - type: web
     name: content-guidelines
     runtime: node
-    buildCommand: npm install && npm run build
+    buildCommand: npm install && npm run build && echo "Build complete"
     startCommand: npm start
+    nodeVersion: 20.18.0
     disk:
       name: copilot-data
       mountPath: /opt/render/project/src/server/data
