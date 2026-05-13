@@ -48,6 +48,106 @@ export function isDataForSEOConfigured() { return !!(process.env.DATAFORSEO_LOGI
 export function isKeywordVolumeEnabled() { return isDataForSEOConfigured() || isSemrushConfigured(); }
 
 // ════════════════════════════════════════════════════════════════════════════
+// DATAFORSEO KEYWORD IDEAS — PRIMARY keyword source
+// Endpoint: dataforseo_labs/google/keyword_ideas/live
+//
+// Response structure (flat — fields are on the item directly, NOT nested
+// under keyword_data):
+//   item.keyword                             → keyword string
+//   item.keyword_info.search_volume          → monthly volume
+//   item.keyword_info.cpc                    → cost per click
+//   item.search_intent_info.main_intent      → informational/commercial/transactional/navigational
+//   item.keyword_properties.keyword_difficulty → 0–100 difficulty
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Fetch keyword ideas with volume, intent, and difficulty from DataForSEO Labs.
+ * This is the PRIMARY keyword data source — keywords_for_keywords returns 0 items
+ * on the standard plan but Labs/keyword_ideas works correctly.
+ */
+export async function fetchDataForSEOKeywordIdeas(phrase, { locationCode = 2840, limit = 25 } = {}) {
+  const login    = process.env.DATAFORSEO_LOGIN;
+  const password = process.env.DATAFORSEO_PASSWORD;
+  if (!login || !password) return [];
+
+  const auth = Buffer.from(`${login}:${password}`).toString('base64');
+  console.log(`  [DFS Ideas] 📡 keyword_ideas for "${phrase}" (limit=${limit})...`);
+  const t0 = Date.now();
+
+  try {
+    const { data: resp } = await axios.post(
+      `${DATAFORSEO_BASE}/dataforseo_labs/google/keyword_ideas/live`,
+      [{
+        keywords:             [phrase],
+        location_code:        locationCode,
+        language_code:        'en',
+        limit,
+        include_serp_info:    false,
+        include_seed_keyword: true,
+        order_by:             ['keyword_info.search_volume,desc']
+      }],
+      {
+        headers: {
+          Authorization:  `Basic ${auth}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: REQUEST_TIMEOUT
+      }
+    );
+
+    const ms = Date.now() - t0;
+
+    if (resp.status_code !== 20000) {
+      console.error(`  [DFS Ideas] ❌ API error ${resp.status_code}: ${resp.status_message}`);
+      return [];
+    }
+
+    const task = resp.tasks?.[0];
+    if (!task || task.status_code !== 20000) {
+      const msg = task?.status_message || 'unknown';
+      if (msg.includes('balance') || msg.includes('credit')) {
+        console.error(`  [DFS Ideas] ❌ Insufficient credits — top up at dataforseo.com/billing`);
+      } else {
+        console.error(`  [DFS Ideas] ❌ Task error: ${msg}`);
+      }
+      return [];
+    }
+
+    const items = task.result?.[0]?.items || [];
+    // Fields are flat on the item, not nested under keyword_data
+    const results = items
+      .filter(item => item.keyword)
+      .map(item => ({
+        keyword:    item.keyword,
+        volume:     item.keyword_info?.search_volume             || 0,
+        cpc:        item.keyword_info?.cpc                       || 0,
+        intent:     item.search_intent_info?.main_intent         || 'informational',
+        difficulty: item.keyword_properties?.keyword_difficulty  ?? null
+      }));
+
+    if (results.length > 0) {
+      const top = results[0];
+      console.log(
+        `  [DFS Ideas] ✅ ${results.length} ideas in ${ms}ms | ` +
+        `top: "${top.keyword}" (${top.volume.toLocaleString()}/mo, intent=${top.intent}, diff=${top.difficulty ?? 'n/a'})`
+      );
+    } else {
+      console.warn(`  [DFS Ideas] ⚠ 0 ideas returned in ${ms}ms`);
+    }
+
+    return results;
+  } catch (e) {
+    const ms = Date.now() - t0;
+    if (e.response?.status === 401) {
+      console.error(`  [DFS Ideas] ❌ Auth failed (${ms}ms)`);
+    } else {
+      console.error(`  [DFS Ideas] ❌ Request failed (${ms}ms): ${e.message}`);
+    }
+    return [];
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // DATAFORSEO IMPLEMENTATION
 // ════════════════════════════════════════════════════════════════════════════
 
@@ -252,14 +352,27 @@ export async function fetchSemrushKeywords(primaryKeyword) {
   let provider    = 'none';
 
   // ── Try DataForSEO first ──
+  // Primary: keyword_ideas (Labs) — returns volume + intent + difficulty
+  // Fallback within DFS: keywords_for_keywords — volume only, may return 0 on some plans
   if (isDataForSEOConfigured()) {
     console.log('  [Keywords] Using DataForSEO as keyword volume provider');
-    const dfsResults = await fetchDataForSEOKeywords(phrase, { limit: 25 });
-    if (dfsResults.length > 0) {
-      allKeywords = dfsResults;
+
+    // Try keyword_ideas first (richer data, works on standard plan)
+    const ideasResults = await fetchDataForSEOKeywordIdeas(phrase, { limit: 25 });
+
+    if (ideasResults.length > 0) {
+      allKeywords = ideasResults;
       provider    = 'dataforseo';
     } else {
-      console.warn('  [Keywords] DataForSEO returned 0 results — trying SEMrush fallback...');
+      // Fallback to keywords_for_keywords (volume-only, may not be available on all plans)
+      console.warn('  [Keywords] keyword_ideas returned 0 — trying keywords_for_keywords fallback...');
+      const volumeResults = await fetchDataForSEOKeywords(phrase, { limit: 25 });
+      if (volumeResults.length > 0) {
+        allKeywords = volumeResults.map(kw => ({ ...kw, intent: 'informational', difficulty: null }));
+        provider    = 'dataforseo';
+      } else {
+        console.warn('  [Keywords] Both DataForSEO endpoints returned 0 — trying SEMrush...');
+      }
     }
   }
 
@@ -317,11 +430,20 @@ export async function fetchSemrushKeywords(primaryKeyword) {
     .map(k => `"${k.keyword}" (${k.volume.toLocaleString()}/mo)`).join(' | ');
   if (top3) console.log(`  [Keywords] 📊 Top 3: ${top3}`);
 
+  // Separate by intent for targeted use (informational → FAQ, commercial/transactional → CTA sections)
+  const byIntent = {
+    informational:  allKeywords.filter(k => k.intent === 'informational').map(k => k.keyword),
+    commercial:     allKeywords.filter(k => k.intent === 'commercial').map(k => k.keyword),
+    transactional:  allKeywords.filter(k => k.intent === 'transactional').map(k => k.keyword),
+    navigational:   allKeywords.filter(k => k.intent === 'navigational').map(k => k.keyword)
+  };
+
   return {
     core:         core.slice(0, 8),
     lsi:          lsi.slice(0, 15),
     longTail:     longTail.slice(0, 15),
     withVolume:   allKeywords.slice(0, 40),
+    byIntent,
     totalFetched: allKeywords.length,
     provider
   };

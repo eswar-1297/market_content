@@ -134,8 +134,22 @@ export const AGENT_TOOLS_OPENAI = [
   {
     type: 'function',
     function: {
+      name: 'suggest_keywords',
+      description: 'Research and suggest target keywords for an ARTICLE TOPIC using DataForSEO. Use ONLY when writer explicitly asks for keyword ideas for writing an article: "generate keywords for [topic]", "suggest keywords for [topic]", "keyword research for [topic]", "what keywords should I target for [article]". Returns keywords with volume, intent, and difficulty. DO NOT use this for AI visibility reports, ranking audits, or when writer passes keywords as a list of queries to check — use check_ai_visibility instead for those cases.',
+      parameters: {
+        type: 'object',
+        properties: {
+          topic: { type: 'string', description: 'The article topic or primary keyword phrase to research (e.g. "SharePoint migration", "Google Drive to OneDrive migration")' }
+        },
+        required: ['topic']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'track_keyword_usage',
-      description: 'Track how well target keywords are used in the content — density, count, which are missing, which are overused. Use this when checking if the writer has incorporated their semantic keywords.',
+      description: 'Track how well target keywords are used in the content — density, count, which are missing, which are overused. Use this when checking if the writer has incorporated their semantic keywords. Requires existing content.',
       parameters: {
         type: 'object',
         properties: {
@@ -464,6 +478,94 @@ export const AGENT_TOOLS_OPENAI = [
           link_types: { type: 'array', items: { type: 'string', enum: ['official_docs', 'research', 'industry_reports', 'best_practices', 'compliance'] }, description: 'Types of links to fetch. Pass ["research"] when user asks for Gartner, statistics, or research data specifically.' }
         },
         required: ['topic']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fetch_serp_competitors',
+      description: 'Fetch the top-ranking competitor pages for a keyword from Google SERP via DataForSEO. Use this when the writer asks: "who is ranking for this topic", "what are competitors writing about", "what content is winning", "show me top results", "SERP analysis", or when generating a framework/article and you want to understand what content currently ranks. Returns top 10 organic results with title, URL, domain, and description. Only available when DATAFORSEO_LOGIN + DATAFORSEO_PASSWORD are configured.',
+      parameters: {
+        type: 'object',
+        properties: {
+          keyword: { type: 'string', description: 'The search keyword or topic to look up in Google (2–5 words for best results, e.g. "google drive sharepoint migration")' }
+        },
+        required: ['keyword']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'check_ai_visibility',
+      description: 'PRIORITY TOOL — Run a full AI search visibility audit for a domain across multiple keywords. Checks 3 engines: (1) Google AI Overviews — direct citation check, (2) Bing SERP — proxy for ChatGPT + Bing Copilot since both use Bing index, (3) Google organic — proxy for Perplexity which trusts Google-ranked pages. ALWAYS call this tool when writer says: "AI visibility report", "run AI visibility audit", "check AI engines", "do we appear in ChatGPT", "Perplexity rankings", "AI ranking audit for our keywords", "check all AI search engines", "AI search presence report". When writer passes "keywords" as the list of queries to CHECK (not to research), that is a visibility audit — call check_ai_visibility, NOT suggest_keywords. Returns a per-keyword table with scores per engine and flags opportunities where AI Overview exists but domain is not cited.',
+      parameters: {
+        type: 'object',
+        properties: {
+          domain:   { type: 'string', description: 'Domain to audit, without https:// (default: "cloudfuze.com")' },
+          keywords: { type: 'array', items: { type: 'string' }, description: 'List of keywords to check across AI engines (max 10). Use your most important target keywords, e.g. ["google drive to sharepoint migration", "saas management tool", "cloud migration software"]' }
+        },
+        required: ['keywords']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'check_ai_overview',
+      description: 'Check Google\'s AI Overview (the AI-generated answer box at the top of Google results) for any keyword. Shows exactly what Google AI says about the topic and whether CloudFuze is cited as a source. Use this when writers ask: "does CloudFuze appear in Google AI results", "what does Google AI say about X", "check AI Overview", "are we cited in AI search", "GEO check", "AI visibility for this keyword". Critical for measuring GEO/AEO success.',
+      parameters: {
+        type: 'object',
+        properties: {
+          keyword: { type: 'string', description: 'The search keyword to check in Google AI Mode (e.g. "google drive to sharepoint migration tool")' }
+        },
+        required: ['keyword']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'check_domain_rankings',
+      description: 'Fetch all keywords a domain currently ranks for on Google, with positions, volume, and intent. Use when writers ask: "what does CloudFuze rank for", "show our rankings", "what keywords are we on page 2 for", "rank audit", "check competitor rankings", "what is [domain] ranking for". Also surfaces page-2 keywords (positions 11–20) which are quick-win improvement targets.',
+      parameters: {
+        type: 'object',
+        properties: {
+          domain:       { type: 'string', description: 'Domain to audit, without https:// (e.g. "cloudfuze.com" or "competitors-domain.com")' },
+          limit:        { type: 'number', description: 'Max keywords to return (default 50, max 100)' },
+          max_position: { type: 'number', description: 'Only return keywords ranking at or above this position (e.g. 20 = top-20 only)' },
+          min_volume:   { type: 'number', description: 'Only return keywords with search volume ≥ this (default 10)' }
+        },
+        required: ['domain']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'parse_competitor_page',
+      description: 'Crawl and extract full content from any URL — returns the page as Markdown with headings, word count, and structure. Use when writers ask: "what does this competitor page say", "analyse this article", "what headings does this page use", "crawl this URL", "what is the structure of [URL]", or when you want to study a top-ranking page before writing. Pass a URL from fetch_serp_competitors to deep-dive into a competitor article.',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'Full URL to crawl and parse (e.g. "https://competitor.com/article-about-migration")' }
+        },
+        required: ['url']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'check_google_trends',
+      description: 'Fetch Google Trends data for 1–5 keywords over the past 12 months. Shows which topics are rising, falling, or stable. Use when writers ask: "is this topic trending", "compare these keywords", "what is more popular X or Y", "Google Trends for X", "is cloud migration demand growing", "which topic should I write about", "seasonal trends". Compare topic variants to pick the best angle before writing.',
+      parameters: {
+        type: 'object',
+        properties: {
+          keywords: { type: 'array', items: { type: 'string' }, description: 'List of 1–5 keywords to compare trends for (e.g. ["sharepoint migration", "onedrive migration", "google drive migration"])' }
+        },
+        required: ['keywords']
       }
     }
   }
@@ -839,6 +941,51 @@ export async function executeTool(toolName, args, writerId = 'default', articleR
         });
       } catch (e) {
         return JSON.stringify({ error: 'Content analysis failed: ' + e.message });
+      }
+    }
+
+    case 'suggest_keywords': {
+      const topic = (args.topic || '').toString().trim();
+      if (!topic) return JSON.stringify({ error: 'topic is required.' });
+
+      try {
+        const { fetchSemrushKeywords, isKeywordVolumeEnabled } = await import('./semrushService.js');
+
+        if (!isKeywordVolumeEnabled()) {
+          return JSON.stringify({
+            error: 'No keyword volume API configured.',
+            setup: 'Add DATAFORSEO_LOGIN + DATAFORSEO_PASSWORD to server/.env for real keyword data.'
+          });
+        }
+
+        const result = await fetchSemrushKeywords(topic);
+        if (result.totalFetched === 0) {
+          return JSON.stringify({ topic, message: 'No keyword data returned — try a shorter phrase (2–4 words).', provider: result.provider });
+        }
+
+        // Annotate withVolume entries for display
+        const topKeywords = result.withVolume.slice(0, 20).map(k => ({
+          keyword:    k.keyword,
+          volume:     k.volume,
+          intent:     k.intent     || 'informational',
+          difficulty: k.difficulty ?? null,
+          cpc:        k.cpc        || 0
+        }));
+
+        return JSON.stringify({
+          topic,
+          provider:    result.provider,
+          summary: {
+            core:     result.core,
+            lsi:      result.lsi,
+            longTail: result.longTail,
+            byIntent: result.byIntent
+          },
+          topKeywords,
+          totalFetched: result.totalFetched
+        });
+      } catch (e) {
+        return JSON.stringify({ error: `Keyword research failed: ${e.message}` });
       }
     }
 
@@ -2237,6 +2384,185 @@ RULES:
         return JSON.stringify(result);
       } catch (e) {
         return JSON.stringify({ error: `External references fetch failed: ${e.message}` });
+      }
+    }
+
+    case 'fetch_serp_competitors': {
+      const kw = (args.keyword || '').toString().trim();
+      if (!kw) return JSON.stringify({ error: 'keyword is required.' });
+
+      try {
+        const { fetchTopRankingPages, formatTopPagesMarkdown } = await import('./serpService.js');
+        const { isDataForSEOConfigured } = await import('./dataforseoSerpService.js');
+
+        if (!isDataForSEOConfigured()) {
+          return JSON.stringify({
+            error: 'DataForSEO not configured.',
+            setup: 'Add DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD to server/.env. Sign up free at dataforseo.com (includes $1 trial credit).'
+          });
+        }
+
+        const pages = await fetchTopRankingPages(kw);
+        if (!pages || pages.length === 0) {
+          return JSON.stringify({ keyword: kw, pages: [], message: 'No SERP results returned — try a shorter keyword (2–5 words).' });
+        }
+
+        const markdown = formatTopPagesMarkdown(pages, kw);
+        return JSON.stringify({ keyword: kw, pages, markdown, total: pages.length });
+      } catch (e) {
+        return JSON.stringify({ error: `SERP competitor fetch failed: ${e.message}` });
+      }
+    }
+
+    case 'check_ai_visibility': {
+      const domain   = (args.domain || 'cloudfuze.com').toString().trim();
+      const keywords = Array.isArray(args.keywords) ? args.keywords.slice(0, 10) : [];
+      if (!keywords.length) return JSON.stringify({ error: 'keywords array is required. Pass your target keywords to check.' });
+
+      try {
+        const { fetchAIVisibilityReport } = await import('./aiVisibilityService.js');
+        const result = await fetchAIVisibilityReport(domain, keywords);
+        if (result.error) return JSON.stringify(result);
+
+        // Build a clean markdown table for the agent to present
+        const tableRows = result.rows.map(r => {
+          const aiStatus   = r.googleAI.cited ? '✅ Cited' : (r.googleAI.hasOverview ? '⚠ Not cited' : '— No AI OVR');
+          const bingStatus = r.bing.found ? `✅ #${r.bing.position}` : '❌ Not found';
+          const gStatus    = r.google.found ? `✅ #${r.google.position}` : '❌ Not found';
+          return `| ${r.keyword} | ${aiStatus} | ${bingStatus} | ${gStatus} |`;
+        });
+
+        const table = [
+          `### AI Visibility Report — ${domain}`,
+          '',
+          '| Keyword | Google AI Overview | Bing (ChatGPT) | Google (Perplexity) |',
+          '|---------|-------------------|----------------|---------------------|',
+          ...tableRows,
+          '',
+          `**Scores:** Google AI ${result.scores.googleAIScore}% | Bing/ChatGPT ${result.scores.bingScore}% | Google/Perplexity ${result.scores.perplexityScore}% | **Overall AI Score: ${result.scores.overallAIScore}/100**`
+        ].join('\n');
+
+        return JSON.stringify({
+          domain,
+          keywords,
+          scores:          result.scores,
+          summary:         result.summary,
+          opportunities:   result.opportunities,
+          strongPresence:  result.strongPresence,
+          noOverviewYet:   result.noOverviewYet,
+          table,
+          rows:            result.rows,
+          insight: result.summary.join('\n')
+        });
+      } catch (e) {
+        return JSON.stringify({ error: `AI visibility audit failed: ${e.message}` });
+      }
+    }
+
+    case 'check_ai_overview': {
+      const kw = (args.keyword || '').toString().trim();
+      if (!kw) return JSON.stringify({ error: 'keyword is required.' });
+      try {
+        const { fetchGoogleAIOverview } = await import('./aiModeService.js');
+        const result = await fetchGoogleAIOverview(kw);
+        if (result.error) return JSON.stringify(result);
+
+        const response = {
+          keyword:          result.keyword,
+          hasAIOverview:    result.hasAIOverview,
+          cloudfuzeAppears: result.cloudfuzeAppears,
+          sourcesCount:     result.sources?.length || 0,
+          sources:          result.sources?.slice(0, 8) || [],
+          overviewPreview:  result.markdown ? result.markdown.slice(0, 600) : null,
+          insight: result.hasAIOverview
+            ? (result.cloudfuzeAppears
+                ? `✅ CloudFuze IS cited in the Google AI Overview for "${kw}". Great GEO signal.`
+                : `⚠️ Google AI Overview EXISTS for "${kw}" but CloudFuze is NOT cited. These ${result.sources?.length || 0} sources are: ${result.sources?.map(s => s.domain).join(', ')}. Write content that directly answers this query to compete.`)
+            : `ℹ️ No Google AI Overview for "${kw}" — this keyword may not have AI Overview coverage yet, which is an opportunity to be first.`
+        };
+        return JSON.stringify(response);
+      } catch (e) {
+        return JSON.stringify({ error: `AI Overview check failed: ${e.message}` });
+      }
+    }
+
+    case 'check_domain_rankings': {
+      const domain = (args.domain || 'cloudfuze.com').toString().trim();
+      const limit       = Math.min(Number(args.limit)       || 50, 100);
+      const maxPosition = args.max_position ? Number(args.max_position) : null;
+      const minVolume   = Number(args.min_volume) || 10;
+      try {
+        const { fetchDomainRankings } = await import('./rankTrackerService.js');
+        const result = await fetchDomainRankings(domain, { limit, maxPosition, minVolume });
+        if (result.error) return JSON.stringify(result);
+
+        const top10    = result.items.filter(k => k.position <= 10);
+        const page2    = result.page2Keywords;
+        const topItems = result.items.slice(0, 20).map(k =>
+          `pos ${k.position}: "${k.keyword}" (${k.volume?.toLocaleString()}/mo, ${k.intent})`
+        );
+
+        return JSON.stringify({
+          domain:           result.domain,
+          totalKeywords:    result.totalKeywords,
+          top10Count:       top10.length,
+          page2Count:       page2.length,
+          topRankings:      topItems,
+          page2QuickWins:   page2.slice(0, 10).map(k =>
+            `pos ${k.position}: "${k.keyword}" (${k.volume?.toLocaleString()}/mo) — ${k.url}`
+          ),
+          insight: `${result.domain} ranks for ${result.totalKeywords} keywords. ${top10.length} are on page 1, ${page2.length} are on page 2 (quick-win targets). Focus content improvements on page-2 keywords to move them to page 1.`
+        });
+      } catch (e) {
+        return JSON.stringify({ error: `Domain rankings fetch failed: ${e.message}` });
+      }
+    }
+
+    case 'parse_competitor_page': {
+      const url = (args.url || '').toString().trim();
+      if (!url) return JSON.stringify({ error: 'url is required.' });
+      try {
+        const { parseCompetitorPage } = await import('./onPageService.js');
+        const result = await parseCompetitorPage(url);
+        if (result.error) return JSON.stringify(result);
+
+        return JSON.stringify({
+          url:       result.url,
+          domain:    result.domain,
+          wordCount: result.wordCount,
+          h2Count:   result.h2s?.length || 0,
+          h2s:       result.h2s || [],
+          allHeadings: result.headings?.slice(0, 20) || [],
+          summary:   result.summary,
+          markdown:  result.markdown,
+          insight:   `${result.domain} article: ${result.wordCount} words, ${result.h2s?.length} H2 sections. H2s: ${result.h2s?.join(' | ')}`
+        });
+      } catch (e) {
+        return JSON.stringify({ error: `Page parsing failed: ${e.message}` });
+      }
+    }
+
+    case 'check_google_trends': {
+      const keywords = Array.isArray(args.keywords) ? args.keywords.slice(0, 5) : [args.keywords || ''].filter(Boolean);
+      if (!keywords.length) return JSON.stringify({ error: 'keywords array is required.' });
+      try {
+        const { fetchGoogleTrends } = await import('./trendsService.js');
+        const result = await fetchGoogleTrends(keywords);
+        if (result.error) return JSON.stringify(result);
+
+        return JSON.stringify({
+          keywords:      result.keywords,
+          risingKeyword: result.risingKeyword,
+          summary:       result.summary,
+          recentData:    result.trend?.map(t => ({
+            keyword:     t.keyword,
+            last4Weeks:  t.data?.slice(-4).map(p => `${p.week}: ${p.score}`) || []
+          })),
+          checkUrl: result.checkUrl,
+          insight:  `"${result.risingKeyword}" is the most searched keyword recently. ${result.summary?.join(' | ')}`
+        });
+      } catch (e) {
+        return JSON.stringify({ error: `Google Trends fetch failed: ${e.message}` });
       }
     }
 

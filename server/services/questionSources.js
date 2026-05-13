@@ -1,5 +1,6 @@
 import axios from 'axios';
 import * as cheerio from 'cheerio';
+import { fetchDataForSEOSerp, isDataForSEOConfigured } from './dataforseoSerpService.js';
 
 const QUESTION_WORDS = ['how', 'what', 'why', 'when', 'where', 'which', 'who', 'can', 'does', 'is', 'are', 'will', 'should', 'do'];
 
@@ -1026,6 +1027,39 @@ export async function fetchYouTubeQuestions(keyword, youtubeApiKey) {
   }).slice(0, 10);
 }
 
+// ═══ SOURCE 8: DataForSEO SERP — real Google PAA + related searches ═══
+// Replaces the brittle direct-scraper (fetchGooglePAADirect) when configured.
+// Same API call also powers serpService.js competitor analysis — no extra charge.
+
+export async function fetchDataForSEOPAA(keyword) {
+  if (!isDataForSEOConfigured()) return [];
+
+  // DataForSEO works best with 2–5 word phrases
+  const searchPhrase = keyword.topicWords.slice(0, 5).join(' ') || keyword.short;
+
+  const serp = await fetchDataForSEOSerp(searchPhrase);
+  if (!serp) return [];
+
+  const questions = [...serp.paaQuestions];
+
+  // Also convert related searches that look like questions
+  for (const rel of serp.relatedSearches) {
+    if (!rel || rel.length < 10) continue;
+    const lower = rel.toLowerCase();
+    const isQ = rel.endsWith('?') || QUESTION_WORDS.some(w => lower.startsWith(w + ' '));
+    if (isQ) {
+      questions.push({
+        question:             rel.endsWith('?') ? rel : rel + '?',
+        source:               'dataforseo-paa',
+        intent:               classifyIntent(rel),
+        searchVolumePotential: 'high'
+      });
+    }
+  }
+
+  return questions;
+}
+
 // ═══ FETCH ALL REAL SOURCES IN PARALLEL ═══
 
 export async function fetchAllRealQuestions(pageData, options = {}) {
@@ -1042,7 +1076,8 @@ export async function fetchAllRealQuestions(pageData, options = {}) {
   console.log(`  \x1b[36m├─ Topic words: [${keyword.topicWords.join(', ')}]\x1b[0m`);
   console.log(`  \x1b[36m├─ Key phrases for filtering: [${(keyword.keyPhrases || []).join(' | ')}]\x1b[0m`);
 
-  const enabledSources = ['Google PAA (direct)', 'Reddit', 'Quora', 'QuestionDB'];
+  const hasDFS = isDataForSEOConfigured();
+  const enabledSources = [hasDFS ? 'DataForSEO PAA' : 'Google PAA (direct)', 'Reddit', 'Quora', 'QuestionDB'];
   if (cseApiKey && cseCx) enabledSources.push('Google CSE');
   if (atpApiKey) enabledSources.push('AnswerThePublic');
   if (rapidApiKey) enabledSources.push('Ubersuggest');
@@ -1050,14 +1085,18 @@ export async function fetchAllRealQuestions(pageData, options = {}) {
 
   const startTime = Date.now();
 
+  // Use DataForSEO PAA when configured (more reliable than scraping); fall back to direct scraper
+  const paaSource     = hasDFS ? fetchDataForSEOPAA(keyword) : fetchGooglePAADirect(keyword);
+  const paaSourceKey  = hasDFS ? 'dataforseoPAA' : 'googlePAADirect';
+
   const sourcePromises = [
-    fetchGooglePAADirect(keyword),
+    paaSource,
     fetchRedditQuestions(keyword),
     fetchGoogleCSE(keyword, cseApiKey, cseCx),
     fetchQuestionDB(keyword),
     fetchQuoraQuestions(keyword, { cseApiKey, cseCx }),
   ];
-  const sourceKeys = ['googlePAADirect', 'reddit', 'googleCSE', 'questionDB', 'quora'];
+  const sourceKeys = [paaSourceKey, 'reddit', 'googleCSE', 'questionDB', 'quora'];
 
   if (atpApiKey) {
     sourcePromises.push(fetchAnswerThePublic(keyword, atpApiKey));
@@ -1094,10 +1133,11 @@ export async function fetchAllRealQuestions(pageData, options = {}) {
   const r = {};
   sourceKeys.forEach((key, i) => { r[key] = results[i]; });
 
-  // Merge Google CSE + direct scraper for PAA-style questions
+  // Merge Google CSE + PAA source (DataForSEO or direct scraper)
+  const paaPrimary = r[paaSourceKey]?.status === 'fulfilled' ? r[paaSourceKey].value : [];
   const allPAA = [
-    ...(r.googleCSE?.status === 'fulfilled' ? r.googleCSE.value : []),
-    ...(r.googlePAADirect?.status === 'fulfilled' ? r.googlePAADirect.value : [])
+    ...paaPrimary,
+    ...(r.googleCSE?.status === 'fulfilled' ? r.googleCSE.value : [])
   ];
 
   const sources = {
