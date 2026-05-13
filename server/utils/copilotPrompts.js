@@ -140,6 +140,7 @@ RULE 3 — Tool routing priority order:
 5. "Google Trends / is this topic trending / compare topics" → check_google_trends
 6. "Generate keywords / suggest keywords / keyword research for [topic]" → suggest_keywords
 7. "Who is ranking for X / top results / SERP analysis" → fetch_serp_competitors
+8. "What are people asking about X / most asked questions / PAA for X / questions people search / real questions about X / what questions should I answer" → get_most_asked_questions
 
 TOOL USAGE — call the RIGHT tool for each request:
 - Writer asks for keywords → call suggest_keywords (standalone research) or track_keyword_usage (if they want to check keywords against their existing content). Present ONLY keywords.

@@ -498,6 +498,21 @@ export const AGENT_TOOLS_OPENAI = [
   {
     type: 'function',
     function: {
+      name: 'get_most_asked_questions',
+      description: 'Fetch the real questions people are asking about a topic using DataForSEO — combines Google Autocomplete (14 question-prefix variations: how to, what is, why, how long, how much, best, vs, etc.) and Google People Also Ask (PAA) boxes from multiple SERP variants. Returns 20-60 deduplicated real questions grouped by intent (how-to, definitional, commercial, comparison, informational). ALWAYS use this when writer asks: "what are people asking about X", "most asked questions for X", "people also ask for X", "PAA for X", "questions people search for X", "what questions should I answer in my article about X", "find questions for X", "give me real questions about X". This is more accurate than AI-generated FAQs because every question comes from real Google searches.',
+      parameters: {
+        type: 'object',
+        properties: {
+          topic: { type: 'string', description: 'The topic to find questions for (e.g. "google drive to sharepoint migration", "saas management", "cloud file migration")' },
+          limit: { type: 'number', description: 'Max questions to return (default 40, max 60)' }
+        },
+        required: ['topic']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'check_ai_visibility',
       description: 'PRIORITY TOOL — Run a full AI search visibility audit for a domain across multiple keywords. Checks 3 engines: (1) Google AI Overviews — direct citation check, (2) Bing SERP — proxy for ChatGPT + Bing Copilot since both use Bing index, (3) Google organic — proxy for Perplexity which trusts Google-ranked pages. ALWAYS call this tool when writer says: "AI visibility report", "run AI visibility audit", "check AI engines", "do we appear in ChatGPT", "Perplexity rankings", "AI ranking audit for our keywords", "check all AI search engines", "AI search presence report". When writer passes "keywords" as the list of queries to CHECK (not to research), that is a visibility audit — call check_ai_visibility, NOT suggest_keywords. Returns a per-keyword table with scores per engine and flags opportunities where AI Overview exists but domain is not cited.',
       parameters: {
@@ -2411,6 +2426,44 @@ RULES:
         return JSON.stringify({ keyword: kw, pages, markdown, total: pages.length });
       } catch (e) {
         return JSON.stringify({ error: `SERP competitor fetch failed: ${e.message}` });
+      }
+    }
+
+    case 'get_most_asked_questions': {
+      const topic = (args.topic || '').toString().trim();
+      if (!topic) return JSON.stringify({ error: 'topic is required.' });
+      const limit = Math.min(Number(args.limit) || 40, 60);
+      try {
+        const { fetchMostAskedQuestions } = await import('./peopleAskService.js');
+        const result = await fetchMostAskedQuestions(topic, { limit });
+        if (result.error) return JSON.stringify(result);
+
+        // Format as grouped numbered list for easy reading
+        const intentLabels = {
+          'how-to':       '🔧 How-To Questions',
+          'definitional': '📖 What Is / Definition Questions',
+          'commercial':   '💰 Cost & Tool Questions',
+          'comparison':   '⚖️ Comparison Questions',
+          'informational': '💡 Why / General Questions'
+        };
+
+        const grouped = Object.entries(result.byIntent).map(([intent, questions]) => {
+          const label = intentLabels[intent] || intent;
+          const numbered = questions.map((q, i) => `${i + 1}. ${q}`).join('\n');
+          return `**${label}** (${questions.length})\n${numbered}`;
+        }).join('\n\n');
+
+        return JSON.stringify({
+          topic,
+          totalFound:   result.totalFound,
+          sourceCounts: result.sourceCounts,
+          byIntent:     result.byIntent,
+          allQuestions: result.questions.map(q => q.question),
+          grouped,
+          insight: `Found ${result.totalFound} real questions people ask about "${topic}" — ${result.sourceCounts.paa} from Google PAA boxes, ${result.sourceCounts.autocomplete} from Google Autocomplete. Use these as H2/H3 headings and FAQ entries for maximum AI citability.`
+        });
+      } catch (e) {
+        return JSON.stringify({ error: `PAA fetch failed: ${e.message}` });
       }
     }
 
