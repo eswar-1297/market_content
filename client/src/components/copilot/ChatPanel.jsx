@@ -257,7 +257,7 @@ function ChatMessage({ message, messages, messageIndex }) {
         }
       </div>
 
-      <div className={`max-w-[85%] group ${isBot ? '' : 'text-right'}`}>
+      <div className={`max-w-[85%] group ${isBot ? '' : 'flex flex-col items-end'}`}>
         {isBot && message.toolSteps?.length > 0 && (
           <div className="mb-2 space-y-1">
             {message.toolSteps.map((step, i) => {
