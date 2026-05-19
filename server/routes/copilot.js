@@ -71,8 +71,10 @@ router.get('/calendar/:writer', (req, res) => {
 
 router.post('/chat', async (req, res) => {
   try {
-    const { message, currentContent, currentHTML, conversationHistory = [], writerContext = {}, articleRequirements = {}, sessionId } = req.body;
-    if (!message?.trim()) return res.status(400).json({ error: 'Message is required' });
+    const { message, currentContent, currentHTML, conversationHistory = [], writerContext = {}, articleRequirements = {}, sessionId, attachments = [] } = req.body;
+    if (!message?.trim() && (!Array.isArray(attachments) || attachments.length === 0)) {
+      return res.status(400).json({ error: 'Message or attachment is required' });
+    }
 
     const aiProvider = getAIProvider(req);
     if (!aiProvider) return res.status(400).json({ error: 'No AI provider configured. Add OpenAI or Gemini API key in Settings.' });
@@ -101,16 +103,43 @@ router.post('/chat', async (req, res) => {
       }
     }
 
+    // ═══ ATTACHMENTS — split into text-injectable (text/pdf) and multimodal (image) ═══
+    const safeAttachments = Array.isArray(attachments) ? attachments : [];
+    const textAttachments = safeAttachments.filter(a => (a?.kind === 'text' || a?.kind === 'pdf') && typeof a?.content === 'string' && a.content.length);
+    const imageAttachments = safeAttachments.filter(a => a?.kind === 'image' && typeof a?.content === 'string' && a.content.startsWith('data:image/'));
+
+    // Cap per-file text injection at 60k chars to avoid blowing up the prompt
+    const MAX_PER_FILE = 60000;
+    const TOTAL_TEXT_CAP = 200000;
+    let injectedTotal = 0;
+    const attachedTextBlocks = [];
+    for (const a of textAttachments) {
+      let body = a.content;
+      if (body.length > MAX_PER_FILE) body = body.slice(0, MAX_PER_FILE) + `\n\n[... truncated; ${a.content.length - MAX_PER_FILE} more chars]`;
+      if (injectedTotal + body.length > TOTAL_TEXT_CAP) {
+        attachedTextBlocks.push(`--- ${a.path || a.name} ---\n[Skipped: total attachment text limit reached]`);
+        continue;
+      }
+      injectedTotal += body.length;
+      attachedTextBlocks.push(`--- File: ${a.path || a.name}${a.kind === 'pdf' ? ' (PDF text extracted)' : ''} ---\n${body}`);
+    }
+    const imageNote = imageAttachments.length
+      ? `\n\n[The user has also attached ${imageAttachments.length} image${imageAttachments.length > 1 ? 's' : ''}: ${imageAttachments.map(i => i.name).join(', ')}. Use your vision to analyze ${imageAttachments.length > 1 ? 'them' : 'it'} as part of this request.]`
+      : '';
+    const userMessageWithAttachments = attachedTextBlocks.length
+      ? `${message.trim()}\n\n[The user has attached the following file(s). Use their content as part of this request:]\n\n${attachedTextBlocks.join('\n\n')}${imageNote}`
+      : `${message.trim()}${imageNote}`;
+
     if (activeSessionId) {
-      saveChatMessage(activeSessionId, 'user', message.trim());
+      saveChatMessage(activeSessionId, 'user', userMessageWithAttachments);
       if (currentContent) {
         updateSession(activeSessionId, { current_content: currentContent });
       }
     }
 
-    const prompt = buildChatPrompt(message.trim(), currentContent || '', conversationHistory, writerContext, articleRequirements);
+    const prompt = buildChatPrompt(userMessageWithAttachments, currentContent || '', conversationHistory, writerContext, articleRequirements);
     const writerId = req.user?.email || req.body.writerId || 'default';
-    const agentReqs = { ...articleRequirements, _currentContent: currentContent || '', _currentHTML: currentHTML || '', _writerName: writerContext?.writerName || '', _writerId: writerId, _sessionId: activeSessionId || undefined, _aiProvider: aiProvider, _rawUserMessage: message.trim() };
+    const agentReqs = { ...articleRequirements, _currentContent: currentContent || '', _currentHTML: currentHTML || '', _writerName: writerContext?.writerName || '', _writerId: writerId, _sessionId: activeSessionId || undefined, _aiProvider: aiProvider, _rawUserMessage: message.trim(), _attachmentImages: imageAttachments };
 
     const agentResult = await runAgent(CHAT_SYSTEM_PROMPT, prompt, aiProvider, agentReqs);
 

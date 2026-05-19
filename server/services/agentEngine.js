@@ -3020,12 +3020,24 @@ function safeParseToolResult(result) {
 
 async function runAgentOpenAI(systemPrompt, userPrompt, provider, articleRequirements = {}, onToolCall = null) {
   const { default: OpenAI } = await import('openai');
-  const client = new OpenAI({ apiKey: provider.apiKey, timeout: 120000 });
+  // Vision-capable model when images are attached; gpt-4o-mini also supports vision but use gpt-4o for stronger results
+  const images = articleRequirements._attachmentImages || [];
+  const useVisionModel = images.length > 0;
+  const model = useVisionModel ? 'gpt-4o' : 'gpt-4o-mini';
+  const client = new OpenAI({ apiKey: provider.apiKey, timeout: 180000 });
   const lfTrace = articleRequirements._langfuseTrace || null;
+
+  // Build first user turn with optional image parts (OpenAI multimodal format)
+  const userContent = images.length
+    ? [
+        { type: 'text', text: userPrompt },
+        ...images.map(img => ({ type: 'image_url', image_url: { url: img.content } }))
+      ]
+    : userPrompt;
 
   const messages = [
     { role: 'system', content: systemPrompt },
-    { role: 'user', content: userPrompt }
+    { role: 'user', content: userContent }
   ];
 
   const toolsUsed = [];
@@ -3035,9 +3047,9 @@ async function runAgentOpenAI(systemPrompt, userPrompt, provider, articleRequire
   if (onToolCall) onToolCall({ phase: 'thinking', step: 0 });
 
   for (let step = 0; step < MAX_STEPS; step++) {
-    const lfGen = lfTrace?.generation({ name: `openai-step-${step}`, model: 'gpt-4o-mini', input: messages });
+    const lfGen = lfTrace?.generation({ name: `openai-step-${step}`, model, input: messages });
     const response = await client.chat.completions.create({
-      model: 'gpt-4o-mini',
+      model,
       messages,
       tools: AGENT_TOOLS_OPENAI,
       tool_choice: 'auto',
@@ -3114,8 +3126,20 @@ async function runAgentGemini(systemPrompt, userPrompt, provider, articleRequire
 
   if (onToolCall) onToolCall({ phase: 'thinking', step: 0 });
 
+  // Build multimodal first message if images attached (Gemini inlineData format)
+  const images = articleRequirements._attachmentImages || [];
+  const firstMessage = images.length
+    ? [
+        { text: userPrompt },
+        ...images.map(img => {
+          const match = img.content.match(/^data:(image\/[a-zA-Z+]+);base64,(.*)$/);
+          return match ? { inlineData: { mimeType: match[1], data: match[2] } } : null;
+        }).filter(Boolean)
+      ]
+    : userPrompt;
+
   const lfGen0 = lfTrace?.generation({ name: 'gemini-step-0', model: 'gemini-2.0-flash', input: [{ role: 'user', content: userPrompt }] });
-  let response = await chat.sendMessage(userPrompt);
+  let response = await chat.sendMessage(firstMessage);
   lfGen0?.end({ output: response.response.candidates?.[0]?.content });
 
   for (let step = 0; step < MAX_STEPS; step++) {
@@ -3179,8 +3203,20 @@ async function runAgentClaude(systemPrompt, userPrompt, provider, articleRequire
   const client = new Anthropic({ apiKey: provider.apiKey, timeout: 180000 });
   const lfTrace = articleRequirements._langfuseTrace || null;
 
+  // Build multimodal first user turn if images attached (Anthropic image block format)
+  const images = articleRequirements._attachmentImages || [];
+  const firstUserContent = images.length
+    ? [
+        { type: 'text', text: userPrompt },
+        ...images.map(img => {
+          const match = img.content.match(/^data:(image\/[a-zA-Z+]+);base64,(.*)$/);
+          return match ? { type: 'image', source: { type: 'base64', media_type: match[1], data: match[2] } } : null;
+        }).filter(Boolean)
+      ]
+    : userPrompt;
+
   const messages = [
-    { role: 'user', content: userPrompt }
+    { role: 'user', content: firstUserContent }
   ];
 
   const toolsUsed = [];

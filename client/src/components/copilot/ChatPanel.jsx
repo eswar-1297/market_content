@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect } from 'react'
-import { Send, Loader2, Bot, User, Copy, Check, Tag, Layers, Search, FileText, UserCircle, Database, Wrench, CalendarDays, Youtube, Star, Table2, HelpCircle, ClipboardCheck, PenLine, Radar, Newspaper, GitFork, FileEdit, ListChecks, BookOpen, Building2, ThumbsUp, ThumbsDown, MessageSquare, X } from 'lucide-react'
+import { Send, Loader2, Bot, User, Copy, Check, Tag, Layers, Search, FileText, UserCircle, Database, Wrench, CalendarDays, Youtube, Star, Table2, HelpCircle, ClipboardCheck, PenLine, Radar, Newspaper, GitFork, FileEdit, ListChecks, BookOpen, Building2, ThumbsUp, ThumbsDown, MessageSquare, X, Paperclip, FolderUp, Image as ImageIcon, FileType2, AlertCircle } from 'lucide-react'
 import { useMsal } from '@azure/msal-react'
 import { authFetch } from '../../services/authFetch'
+import { readAttachments } from '../../services/attachmentReader'
 
 const TOOL_ICONS = {
   search_past_articles: Search,
@@ -31,8 +32,14 @@ const TOOL_ICONS = {
 export default function ChatPanel({ messages, onSendMessage, loading, onSetWriter, onSetTopic, sessionId }) {
   const [input, setInput] = useState('')
   const [sharepointMode, setSharepointMode] = useState(false)
+  const [attachments, setAttachments] = useState([])
+  const [attachLoading, setAttachLoading] = useState(false)
+  const [attachMenuOpen, setAttachMenuOpen] = useState(false)
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
+  const fileInputRef = useRef(null)
+  const folderInputRef = useRef(null)
+  const attachMenuRef = useRef(null)
 
   const { accounts } = useMsal()
   const userName = accounts[0]?.name?.split(' ')[0] || accounts[0]?.username?.split('@')[0] || 'there'
@@ -48,6 +55,39 @@ export default function ChatPanel({ messages, onSendMessage, loading, onSetWrite
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
+  useEffect(() => {
+    if (!attachMenuOpen) return
+    const onDown = (e) => {
+      if (attachMenuRef.current && !attachMenuRef.current.contains(e.target)) {
+        setAttachMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [attachMenuOpen])
+
+  const handleFilesPicked = async (e) => {
+    const files = e.target.files
+    if (!files || files.length === 0) return
+    setAttachLoading(true)
+    try {
+      const parsed = await readAttachments(files)
+      setAttachments(prev => [...prev, ...parsed])
+    } catch (err) {
+      console.error('Attachment read error:', err)
+    } finally {
+      setAttachLoading(false)
+      // Allow re-picking the same file
+      e.target.value = ''
+    }
+  }
+
+  const removeAttachment = (idx) => {
+    setAttachments(prev => prev.filter((_, i) => i !== idx))
+  }
+
+  const clearAttachments = () => setAttachments([])
+
   const autoResize = () => {
     const el = inputRef.current
     if (!el) return
@@ -57,19 +97,23 @@ export default function ChatPanel({ messages, onSendMessage, loading, onSetWrite
 
   const handleSend = () => {
     const text = input.trim()
-    if (!text || loading) return
+    const hasAttachments = attachments.length > 0
+    if ((!text && !hasAttachments) || loading) return
     setInput('')
     // Reset height after clearing
     if (inputRef.current) {
       inputRef.current.style.height = 'auto'
     }
+    const sendable = attachments.filter(a => a.kind !== 'skipped')
+    const effectiveText = text || (hasAttachments ? 'Please review the attached file(s) and respond accordingly.' : '')
     if (sharepointMode) {
-      const spPrompt = `[SHAREPOINT LOOKUP] Search the internal SharePoint DOC360 site for: ${text}. Use the search_sharepoint_docs tool to find this information. Do NOT guess — only return data found in SharePoint.`
-      onSendMessage(spPrompt, `SharePoint: ${text}`)
+      const spPrompt = `[SHAREPOINT LOOKUP] Search the internal SharePoint DOC360 site for: ${effectiveText}. Use the search_sharepoint_docs tool to find this information. Do NOT guess — only return data found in SharePoint.`
+      onSendMessage(spPrompt, `SharePoint: ${effectiveText}`, sendable)
       setSharepointMode(false)
     } else {
-      onSendMessage(text)
+      onSendMessage(effectiveText, undefined, sendable)
     }
+    clearAttachments()
   }
 
   const handleKeyDown = (e) => {
@@ -130,6 +174,25 @@ export default function ChatPanel({ messages, onSendMessage, loading, onSetWrite
 
       {/* Input */}
       <div className="px-3 pb-3 pt-1 border-t border-gray-100 dark:border-gray-800">
+        {/* Hidden file inputs */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          accept="image/*,.pdf,.md,.mdx,.txt,.csv,.tsv,.json,.jsonl,.yaml,.yml,.html,.htm,.xml,.log,.ini,.env,.toml,.js,.jsx,.ts,.tsx,.mjs,.cjs,.css,.scss,.sass,.less,.py,.rb,.go,.java,.kt,.swift,.rs,.php,.sh,.ps1,.sql,.r"
+          onChange={handleFilesPicked}
+          className="hidden"
+        />
+        <input
+          ref={folderInputRef}
+          type="file"
+          webkitdirectory=""
+          directory=""
+          multiple
+          onChange={handleFilesPicked}
+          className="hidden"
+        />
+
         <div className="space-y-1.5">
           {sharepointMode && (
             <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 text-xs text-blue-700 dark:text-blue-300">
@@ -139,7 +202,47 @@ export default function ChatPanel({ messages, onSendMessage, loading, onSetWrite
               <button onClick={() => setSharepointMode(false)} className="ml-auto text-blue-400 hover:text-blue-600 dark:hover:text-blue-300 font-bold">&times;</button>
             </div>
           )}
+
+          {/* Attachment chips */}
+          {attachments.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {attachments.map((a, i) => (
+                <AttachmentChip key={i} att={a} onRemove={() => removeAttachment(i)} />
+              ))}
+            </div>
+          )}
+
           <div className={`flex items-end gap-2 bg-gray-50 dark:bg-gray-800 rounded-xl px-3 py-2 border ${sharepointMode ? 'border-blue-300 dark:border-blue-700 ring-1 ring-blue-200 dark:ring-blue-800' : 'border-gray-200 dark:border-gray-700'} focus-within:ring-2 focus-within:ring-indigo-500 focus-within:border-transparent`}>
+            {/* Attach button with popover menu */}
+            <div className="relative flex-shrink-0" ref={attachMenuRef}>
+              <button
+                onClick={() => setAttachMenuOpen(v => !v)}
+                title="Attach files or a folder"
+                disabled={loading || attachLoading}
+                className="w-8 h-8 rounded-lg flex items-center justify-center transition-colors bg-gray-200 dark:bg-gray-700 text-gray-500 dark:text-gray-400 hover:bg-indigo-100 dark:hover:bg-indigo-900/30 hover:text-indigo-600 dark:hover:text-indigo-400 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {attachLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Paperclip className="w-4 h-4" />}
+              </button>
+              {attachMenuOpen && (
+                <div className="absolute bottom-10 left-0 z-20 w-44 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg overflow-hidden">
+                  <button
+                    onClick={() => { setAttachMenuOpen(false); fileInputRef.current?.click() }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800"
+                  >
+                    <Paperclip className="w-4 h-4 text-indigo-500" />
+                    <span>Upload files</span>
+                  </button>
+                  <button
+                    onClick={() => { setAttachMenuOpen(false); folderInputRef.current?.click() }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 border-t border-gray-100 dark:border-gray-800"
+                  >
+                    <FolderUp className="w-4 h-4 text-indigo-500" />
+                    <span>Upload folder</span>
+                  </button>
+                </div>
+              )}
+            </div>
+
             <button
               onClick={() => setSharepointMode(!sharepointMode)}
               title={sharepointMode ? 'Disable SharePoint mode' : 'Ask from SharePoint docs'}
@@ -164,7 +267,7 @@ export default function ChatPanel({ messages, onSendMessage, loading, onSetWrite
             />
             <button
               onClick={handleSend}
-              disabled={!input.trim() || loading}
+              disabled={(!input.trim() && attachments.length === 0) || loading}
               className="flex-shrink-0 w-8 h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center hover:bg-indigo-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <Send className="w-4 h-4" />
@@ -172,6 +275,36 @@ export default function ChatPanel({ messages, onSendMessage, loading, onSetWrite
           </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+function AttachmentChip({ att, onRemove }) {
+  const Icon = att.kind === 'image' ? ImageIcon
+    : att.kind === 'pdf' ? FileType2
+    : att.kind === 'skipped' ? AlertCircle
+    : FileText
+  const sizeKB = att.size ? `${(att.size / 1024).toFixed(0)} KB` : ''
+  const isSkipped = att.kind === 'skipped'
+  return (
+    <div
+      className={`group inline-flex items-center gap-1.5 max-w-[240px] px-2 py-1 rounded-md text-xs border ${
+        isSkipped
+          ? 'bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-900 text-red-700 dark:text-red-300'
+          : 'bg-indigo-50 dark:bg-indigo-950/30 border-indigo-200 dark:border-indigo-900 text-indigo-700 dark:text-indigo-300'
+      }`}
+      title={isSkipped ? `${att.path} — ${att.error}` : `${att.path} (${sizeKB})`}
+    >
+      <Icon className="w-3.5 h-3.5 flex-shrink-0" />
+      <span className="truncate font-medium">{att.name}</span>
+      {!isSkipped && sizeKB && <span className="text-indigo-500/70 dark:text-indigo-400/60">{sizeKB}</span>}
+      <button
+        onClick={onRemove}
+        className="ml-1 flex-shrink-0 opacity-60 hover:opacity-100"
+        title="Remove"
+      >
+        <X className="w-3 h-3" />
+      </button>
     </div>
   )
 }

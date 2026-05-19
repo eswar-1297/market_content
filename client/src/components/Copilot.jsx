@@ -229,7 +229,7 @@ export default function Copilot() {
     }
   }
 
-  const sendMessage = async (text, displayText) => {
+  const sendMessage = async (text, displayText, attachments = []) => {
     const trimmed = text.trim()
     const isBarURL = /^https?:\/\/[^\s]+$/i.test(trimmed) && !displayText
     const actualPrompt = isBarURL
@@ -237,7 +237,13 @@ export default function Copilot() {
       : text
     const actualDisplay = isBarURL ? `Audit this article: ${trimmed}` : (displayText || text)
 
-    const userMessage = { role: 'user', content: actualDisplay }
+    const attachmentSummary = attachments?.length
+      ? attachments.map(a => `${a.kind === 'image' ? '🖼️' : a.kind === 'pdf' ? '📄' : '📎'} ${a.name}`).join(' · ')
+      : ''
+    const userMessage = {
+      role: 'user',
+      content: attachmentSummary ? `${actualDisplay}\n\n${attachmentSummary}` : actualDisplay
+    }
     setMessages(prev => [...prev, userMessage])
     setChatLoading(true)
 
@@ -258,7 +264,8 @@ export default function Copilot() {
           })),
           writerContext: { topic, keywords, writerName },
           articleRequirements,
-          sessionId: activeSessionId
+          sessionId: activeSessionId,
+          attachments: attachments || []
         })
       })
 
