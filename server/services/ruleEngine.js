@@ -268,7 +268,10 @@ export function analyzeContent(content, contentType = 'text') {
     categories,
     checks,
     suggestions,
-    visualRecommendations
+    visualRecommendations,
+    // AI-Readiness rubric — a separate, additive 10-check scorecard (X/10 + A–F grade).
+    // Does NOT feed into the CSABF category scores above — it is a parallel evaluator.
+    aiReadiness: evaluateAIReadiness(html, plainText, contentContext)
   };
 }
 
@@ -1775,6 +1778,427 @@ function generateVisualRecommendations(plainText, html, wordCount) {
   }
 
   return recommendations;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// AI-READINESS RUBRIC — 10-check competitive evaluator (additive, non-blocking)
+// ═══════════════════════════════════════════════════════════════════════════════
+// Derived from competitive analysis of how 2026-era AI engines (ChatGPT, Google AI
+// Overview, Gemini, Perplexity, Claude) extract and cite content. Runs alongside
+// CSABF but reports as its OWN X/10 scorecard + A–F grade. These are SUGGESTIONS,
+// not blocking gates — writers make the final call. Each check returns a verdict
+// (PASS / WARNING / FAIL), the exact offending text, and a method-based fix the
+// writer applies themselves. The agent layer turns these flags into concrete
+// rewrites (see agentEngine analyze_content_structure instruction).
+
+// Check 1 — title openers
+const AIR_APPROVED_TITLE = [
+  /^how to\s+\S/i,
+  /^a practical playbook\s+(for|to)\s+\S/i,
+  /^step.?by.?step guide to\s+\S/i,
+  /^(the\s+)?complete guide\s+(to|for)\s+\S/i,
+  /^your guide to\s+\S/i,
+  /^it guide to\s+\S/i,
+  /:\s*(the\s+)?(complete|ultimate|definitive)\s+guide/i,   // "[Topic]: Complete Guide for 2026"
+  /:\s*complete guide for\s+\d{4}/i
+];
+const AIR_BANNED_TITLE = [
+  /^what to consider\b/i,
+  /^avoid\b/i,
+  /^things (to|you) (know|should)\b/i,
+  /^\d+\s+(top\s+)?tips?\b/i,    // "5 Tips...", "5 Top Tips..."
+  /^top\s+\d+\b/i,              // "Top 5..."
+  /^\d+\s+top\b/i,             // "5 Top..."
+  /^when should\b/i,
+  /^tips for\b/i,
+  /^why you need\b/i,
+  /^manage\b/i                 // "Manage..." as the opening verb
+];
+
+// Check 5 — banned opening-paragraph hedge phrases
+const AIR_HEDGE_OPENERS = /^(nowadays\b|in today'?s\b|in the (ever|current|modern|fast|rapidly)|it is important to note|nevertheless\b|furthermore\b|moreover\b|in this (article|blog|post|guide))/i;
+
+// Check 9 — named product/feature density (generic references do NOT count)
+const AIR_PRODUCTS = [
+  'CloudFuze X-Change',
+  'CloudFuze Migrate',
+  'CloudFuze Manage',
+  'AI Chat Agent',
+  'Shadow IT Control',
+  'Shadow AI Governance',
+  'X-Change'
+];
+const AIR_GENERIC_PRODUCT = [
+  /\bour (migration )?tool\b/i,
+  /\bthe platform\b/i,
+  /\bour solution\b/i,
+  /\bour product\b/i,
+  /\bthe tool\b/i,
+  /\bour software\b/i
+];
+
+// Check 2 — author byline
+const AIR_KNOWN_AUTHORS = /\b(Aayushi Raj|Bhavani Asok|Pankaj Rai|Rashmi Ramesh)\b/i;
+const AIR_ROLE_WORDS = /\b(content strategist|content writer|technical writer|content marketer|writer|editor|strategist|author|specialist|marketer)\b/i;
+
+// Check 7 — generic (non-descriptive) step subheads
+const AIR_GENERIC_STEP = /^(planning|execution|migration|setup|set\s?up|overview|introduction|preparation|prep|review|testing|validation|implementation|conclusion|analysis|research|deployment|configuration)$/i;
+
+/**
+ * Extract the bullet list that belongs to a "Key Takeaways" block, if present.
+ * Returns an array of bullet strings, or null if no takeaways block is found.
+ */
+function getTakeawayBullets(html) {
+  const markerRe = /<h[1-4][^>]*>[^<]*?(key\s+takeaways?|takeaways?|tl;?dr|at a glance)[^<]*?<\/h[1-4]>|key\s+takeaways?\s*:/i;
+  const m = html.match(markerRe);
+  if (!m) return null;
+  const after = html.slice(m.index + m[0].length);
+  const nextHeading = after.search(/<h[1-4][^>]*>/i);
+  const region = nextHeading >= 0 ? after.slice(0, nextHeading) : after.slice(0, 1500);
+  const items = [];
+  const liRe = /<li[^>]*>([\s\S]*?)<\/li>/gi;
+  let li;
+  while ((li = liRe.exec(region)) !== null) {
+    const t = stripHtml(li[1]).trim();
+    if (t) items.push(t);
+  }
+  return items.length ? items : [];
+}
+
+/**
+ * Extract the page author from meta tags. Published pages expose this even when
+ * the visible byline sits below the <head>. Returns the author name or null.
+ */
+function extractMetaAuthor(html) {
+  if (!html || typeof html !== 'string') return null;
+  const m = html.match(/<meta[^>]+name=["']author["'][^>]*content=["']([^"']+)["']/i)
+    || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+name=["']author["']/i)
+    || html.match(/<meta[^>]+property=["']article:author["'][^>]*content=["']([^"']+)["']/i);
+  if (m && m[1]) {
+    const v = m[1].trim();
+    if (v && !/^https?:/i.test(v) && v.length <= 60) return v;
+  }
+  return null;
+}
+
+/**
+ * Collect heading texts that live inside a FAQ H2 section, so numbered FAQ
+ * questions ("1. Can you migrate…") are not mistaken for procedural steps.
+ */
+function getFaqHeadingTexts(headings) {
+  const faqSet = new Set();
+  let inFaq = false;
+  for (const h of headings) {
+    if (h.level === 2) inFaq = /faq|frequently\s+asked|common\s+questions/i.test(h.text);
+    if (inFaq && h.level >= 3) faqSet.add(h.text);
+  }
+  return faqSet;
+}
+
+/**
+ * Run the 10-check AI-Readiness rubric. Pure string/regex analysis — no AI calls.
+ * Returns { score, maxScore, grade, passCount, warningCount, failCount,
+ *           priorityFixes, checks: [{ id, label, verdict, current, diagnosis, suggestion }] }
+ */
+export function evaluateAIReadiness(html, plainText, contentContext = {}) {
+  const headings = extractHeadings(html);
+  const h1 = headings.find(h => h.level === 1);
+  const h2s = headings.filter(h => h.level === 2);
+  const subheads = headings.filter(h => h.level === 2 || h.level === 3);
+  const paragraphs = extractParagraphs(html, 'html');
+  const lists = extractLists(html);
+  const wordCount = countWords(plainText);
+  const headHtml = html.slice(0, 1200);        // "near the top" region for byline / reading time
+  const headText = stripHtml(headHtml);
+
+  // Procedural step subheads — numbered/step-labelled headings OUTSIDE the FAQ
+  // section (so numbered FAQ questions aren't counted as steps). Shared by checks 7 & 8.
+  const faqHeadingTexts = getFaqHeadingTexts(headings);
+  const stepHeads = subheads.filter(h =>
+    !faqHeadingTexts.has(h.text) &&
+    (/^(step|phase)\s*\d+\b/i.test(h.text) || /^\d+[.)]\s+\S/.test(h.text))
+  );
+
+  const checks = [];
+  const push = (id, label, verdict, current, diagnosis, suggestion = null) =>
+    checks.push({ id, label, verdict, current, diagnosis, suggestion });
+
+  // ── Check 1: Title Pattern ──
+  {
+    const title = (h1?.text || headings[0]?.text || '').trim();
+    if (!title) {
+      push(1, 'Title Pattern', 'FAIL', '(no title/H1 found)',
+        'No H1 found to evaluate.',
+        'Add an H1 that opens with an action commitment, e.g. "How to [action] [outcome]: [N]-Step Playbook for Enterprise IT".');
+    } else if (AIR_BANNED_TITLE.some(p => p.test(title))) {
+      push(1, 'Title Pattern', 'FAIL', `"${title}"`,
+        'Title opens with a soft/descriptive pattern AI engines rarely read as a committed answer.',
+        'Convert the opener to an action commitment ("How to…" or "A Practical Playbook for…"), name the specific outcome + audience, keep under ~80 chars. e.g. "How to Migrate Data to a New Destination: 8-Step Playbook for Enterprise IT".');
+    } else if (AIR_APPROVED_TITLE.some(p => p.test(title))) {
+      push(1, 'Title Pattern', 'PASS', `"${title}"`,
+        'Title opens with an approved action / answer-commitment pattern.');
+    } else {
+      push(1, 'Title Pattern', 'WARNING', `"${title}"`,
+        'Not a banned opener, but the title does not commit to delivering an answer with an action verb.',
+        'Consider reframing to "How to [action] [outcome]" or "[Topic]: Complete Guide for 2026", and add the target audience (e.g. "for Enterprise IT").');
+    }
+  }
+
+  // ── Check 2: Author Byline ──
+  {
+    // Look across the whole page (meta tag, visible "By Name", known authors) —
+    // not just the head slice, since published pages put the byline below <head>.
+    const metaAuthor = extractMetaAuthor(html);
+    const visibleBy = (plainText.match(/\bby\s+([A-Z][a-z]+\s+[A-Z][a-z]+)/) || [])[1];
+    const knownAuthor = (plainText.match(AIR_KNOWN_AUTHORS) || [])[0];
+    const authorName = metaAuthor || knownAuthor || visibleBy || null;
+
+    // Role is "shown" if a role word appears near the byline or in the top region.
+    let hasRole = AIR_ROLE_WORDS.test(headText);
+    if (!hasRole && authorName) {
+      const idx = plainText.toLowerCase().indexOf(authorName.toLowerCase());
+      if (idx >= 0) {
+        const around = plainText.slice(Math.max(0, idx - 60), idx + authorName.length + 120);
+        hasRole = AIR_ROLE_WORDS.test(around);
+      }
+    }
+
+    if (authorName && hasRole) {
+      push(2, 'Author Byline', 'PASS', `${authorName} (role shown)`,
+        'Named author and role are both present.');
+    } else if (authorName) {
+      push(2, 'Author Byline', 'WARNING', authorName,
+        'Author name is present (byline or meta tag) but a visible role/credential is missing.',
+        `Show the role next to the name (e.g. "${authorName}, Content Strategist") and link to the author bio page (/author/[name]/).`);
+    } else {
+      push(2, 'Author Byline', 'FAIL', '(no byline detected)',
+        'No author byline or author metadata found.',
+        'Add a named byline with role, e.g. "Bhavani Asok, Content Strategist", and link to the author bio page. CloudFuze authors: Aayushi Raj, Bhavani Asok, Pankaj Rai, Rashmi Ramesh.');
+    }
+  }
+
+  // ── Check 3: Reading Time ──
+  {
+    const rtMatch = headText.match(/(\d+)\s*(?:min|minute)s?\s*read/i) || plainText.match(/(\d+)\s*(?:min|minute)s?\s*read/i);
+    if (rtMatch) {
+      const mins = parseInt(rtMatch[1], 10);
+      if (mins >= 3 && mins <= 10) {
+        push(3, 'Reading Time', 'PASS', rtMatch[0], 'Reading time is visible and within a reasonable 3–10 min range.');
+      } else {
+        push(3, 'Reading Time', 'WARNING', rtMatch[0],
+          `Reading time is visible but ${mins} min looks off for a standard blog post (expected 3–10).`,
+          'Recheck the estimate against the actual word count (≈230 words per minute).');
+      }
+    } else {
+      const est = Math.max(1, Math.round(wordCount / 230));
+      push(3, 'Reading Time', 'FAIL', '(none)',
+        'No reading time displayed near the top.',
+        `Add a reading-time label near the title — approximately "${est} min read" based on the current ${wordCount} words.`);
+    }
+  }
+
+  // ── Check 4: Key Takeaways Block ──
+  {
+    const bullets = getTakeawayBullets(html);
+    if (bullets === null) {
+      push(4, 'Key Takeaways Block', 'FAIL', '(none)',
+        'No Key Takeaways block found near the top. This is CloudFuze\'s single biggest extractability advantage — standardize it.',
+        'Add a "Key Takeaways:" block after the intro with exactly 5 bullets, each a complete claim of 8–15 words that could stand alone as an answer.');
+    } else {
+      const counts = bullets.map(b => countWords(b));
+      const tooShort = counts.filter(c => c < 8).length;
+      const tooLong = counts.filter(c => c > 20).length;
+      const okCount = bullets.length >= 3 && bullets.length <= 7;
+      if (okCount && tooShort === 0 && tooLong === 0) {
+        push(4, 'Key Takeaways Block', 'PASS', `${bullets.length} bullets, ${Math.round(counts.reduce((a, b) => a + b, 0) / counts.length)} avg words`,
+          'Takeaways block present with 3–7 complete-claim bullets in the 8–15 word sweet spot.');
+      } else {
+        const probs = [];
+        if (!okCount) probs.push(`${bullets.length} bullets (target 5, accept 3–7)`);
+        if (tooShort) probs.push(`${tooShort} bullet(s) under 8 words (likely fragments)`);
+        if (tooLong) probs.push(`${tooLong} bullet(s) over 20 words`);
+        push(4, 'Key Takeaways Block', 'WARNING', `${bullets.length} bullets`,
+          `Block exists but: ${probs.join('; ')}.`,
+          'Aim for exactly 5 bullets, each a complete claim (subject + verb + object) of 8–15 words.');
+      }
+    }
+  }
+
+  // ── Check 5: Opening Paragraph ──
+  {
+    const opening = (paragraphs.find(p => countWords(p) >= 12) || paragraphs[0] || '').trim();
+    if (!opening) {
+      push(5, 'Opening Paragraph', 'FAIL', '(none)',
+        'No opening body paragraph found.',
+        'Open with a concrete observation about the current state, then end on tension (a "but" or "the question is…"). Keep to 2 sentences, 50–60 words.');
+    } else {
+      const ow = countWords(opening);
+      const os = countSentences(opening);
+      const hedge = AIR_HEDGE_OPENERS.test(opening);
+      const listy = /:\s*$/.test(opening) || ((opening.match(/,/g) || []).length >= 4 && !/[?]/.test(opening));
+      const quoted = opening.length > 220 ? opening.slice(0, 220) + '…' : opening;
+      if (ow > 75 || hedge || listy) {
+        const why = ow > 75 ? `${ow} words (over 75)` : hedge ? 'opens with a banned hedge phrase' : 'reads as an abstract list of concerns rather than tension';
+        push(5, 'Opening Paragraph', 'FAIL', `${ow} words / ${os} sentences — "${quoted}"`,
+          `Opening ${why}.`,
+          'Rewrite to ≤2 sentences, 50–60 words: concrete current-state observation first, then end on tension. Drop hedges like "Nowadays" / "In today\'s world".');
+      } else if (ow >= 60 || os > 2) {
+        push(5, 'Opening Paragraph', 'WARNING', `${ow} words / ${os} sentences`,
+          `Opening is ${ow} words across ${os} sentence(s) — tighten toward 50–60 words and ≤2 sentences.`,
+          'Cut to the core tension and remove setup clauses.');
+      } else {
+        push(5, 'Opening Paragraph', 'PASS', `${ow} words / ${os} sentences`,
+          'Opening is under 60 words, ≤2 sentences, and avoids hedge openers.');
+      }
+    }
+  }
+
+  // ── Check 6: At least one H2 phrased as a question ──
+  {
+    // Any H2 ending with "?" reads as a question — even if it leads with the
+    // topic ("…: What's Possible?") rather than a question word.
+    const questionH2 = h2s.find(h => /\?\s*$/.test(h.text.trim()));
+    const convertible = h2s.filter(h => /^(what|why|how|when|should|can|does|do|is|are)\b/i.test(h.text.trim())).map(h => h.text);
+    if (questionH2) {
+      push(6, 'Question-format H2', 'PASS', `"${questionH2.text}"`,
+        'At least one H2 is phrased as a direct question, mirroring AI prompt phrasing.');
+    } else if (convertible.length > 0) {
+      push(6, 'Question-format H2', 'WARNING', convertible.slice(0, 2).map(t => `"${t}"`).join(', '),
+        'No H2 is a complete question, but one or two are easily convertible.',
+        `Reframe an existing H2 into a question ending with "?", e.g. turn "${convertible[0]}" into a direct "What/Why/How…?" form.`);
+    } else {
+      push(6, 'Question-format H2', 'FAIL', `${h2s.length} H2(s), none are questions`,
+        'No H2 is phrased as a question, so none directly match how users prompt AI engines.',
+        'Convert the 2–3 most search-like H2s into questions (e.g. "What Is Content Sprawl?", "How Long Does a Tenant-to-Tenant Migration Take?").');
+    }
+  }
+
+  // ── Check 7: Numbered Step Structure with descriptive subheads ──
+  {
+    const numberedLists = lists.filter(l => l.type === 'numbered' && l.items.length >= 3);
+    const hasStructure = stepHeads.length >= 2 || numberedLists.length > 0;
+    const proc = contentContext.isProcedural || contentContext.isMultiMethod ||
+      ['how-to', 'multi-method', 'troubleshooting'].includes(contentContext.detectedType);
+    const fix7 = 'Use "Step N: [Action verb] [outcome] [with CloudFuze product]" subheads — e.g. "Step 1: Automate the Data Layer with CloudFuze Migrate". Avoid bare nouns like "Planning".';
+    if (!hasStructure) {
+      push(7, 'Numbered Step Subheads', proc ? 'FAIL' : 'WARNING',
+        '(no numbered step structure)',
+        proc ? 'Procedural content but no numbered step structure found.'
+             : 'No numbered step structure — optional for this content type, but step framing lifts AI extractability.',
+        fix7);
+    } else if (stepHeads.length >= 2) {
+      const generic = stepHeads.filter(h => {
+        const tail = h.text.replace(/^(step|phase)\s*\d+\s*[:\-–.)]*\s*/i, '').trim();
+        return !tail || AIR_GENERIC_STEP.test(tail) || countWords(tail) < 2;
+      });
+      if (generic.length === 0) {
+        push(7, 'Numbered Step Subheads', 'PASS', `${stepHeads.length} step subheads`,
+          'Numbered structure present with descriptive action-verb subheads.');
+      } else {
+        push(7, 'Numbered Step Subheads', 'WARNING', generic.map(h => `"${h.text}"`).slice(0, 3).join(', '),
+          `${generic.length} step subhead(s) are generic single nouns rather than action-verb descriptions.`,
+          fix7);
+      }
+    } else {
+      push(7, 'Numbered Step Subheads', 'WARNING', `${numberedLists.length} numbered list(s), no step subheads`,
+        'A numbered list exists but the steps lack descriptive action-verb subheads.',
+        fix7);
+    }
+  }
+
+  // ── Check 8: Key Principle / Bottom Line callouts ──
+  {
+    const calloutRe = /\b(key principle|bottom line)\s*:/gi;
+    const calloutCount = (plainText.match(calloutRe) || []).length;
+    const expected = stepHeads.length >= 2 ? stepHeads.length : h2s.length;
+    const fix8 = 'After each numbered step or major H2, add a one-line "Key principle:" or "Bottom line:" callout (8–15 words) that states the LESSON, not the action — often an "X, not Y" construction. e.g. "Key principle: Migrate clean data, not legacy debt."';
+    if (calloutCount === 0) {
+      push(8, 'Key Principle / Bottom Line Callouts', 'FAIL', '(none)',
+        'No "Key principle:" / "Bottom line:" callouts anywhere. This is the single highest-leverage extractability fix and is currently absent.',
+        fix8);
+    } else if (expected > 0 && calloutCount >= expected) {
+      push(8, 'Key Principle / Bottom Line Callouts', 'PASS', `${calloutCount} callout(s)`,
+        'Every numbered step / major section is capped with a quotable principle.');
+    } else {
+      push(8, 'Key Principle / Bottom Line Callouts', 'WARNING', `${calloutCount} callout(s) for ~${expected} section(s)`,
+        'Some sections have principle callouts, others don\'t — coverage is uneven.',
+        fix8);
+    }
+  }
+
+  // ── Check 9: Named Product Density ──
+  {
+    let productCount = 0;
+    for (const name of AIR_PRODUCTS) {
+      const re = new RegExp('\\b' + name.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&') + '\\b', 'gi');
+      productCount += (plainText.match(re) || []).length;
+    }
+    const genericHits = AIR_GENERIC_PRODUCT.filter(p => p.test(plainText)).length;
+    const fix9 = 'Replace generic references ("our tool", "the platform", "our solution") with specific names — CloudFuze Migrate, CloudFuze Manage, AI Chat Agent, Shadow IT Control, Shadow AI Governance — and pair each with a concrete capability.';
+    if (productCount >= 5) {
+      push(9, 'Named Product Density', 'PASS', `${productCount} specific mention(s)`,
+        'Specific CloudFuze product/feature names appear 5+ times — strong entity signal for citation routing.');
+    } else if (productCount >= 3) {
+      push(9, 'Named Product Density', 'WARNING', `${productCount} specific mention(s)${genericHits ? `, ${genericHits} generic reference type(s)` : ''}`,
+        'Only 3–4 specific product mentions. Push to 5+ for stronger LLM entity association.',
+        fix9);
+    } else {
+      push(9, 'Named Product Density', 'FAIL', `${productCount} specific mention(s)${genericHits ? `, ${genericHits} generic reference type(s)` : ''}`,
+        'Fewer than 3 specific product mentions — references are too generic for AI engines to attribute to CloudFuze.',
+        fix9);
+    }
+  }
+
+  // ── Check 10: Sentence Discipline ──
+  {
+    const sentences = plainText.split(/(?<=[.!?])\s+/).map(s => s.trim()).filter(s => countWords(s) >= 3);
+    const lengths = sentences.map(s => countWords(s));
+    const avg = lengths.length ? lengths.reduce((a, b) => a + b, 0) / lengths.length : 0;
+    const longCount = lengths.filter(l => l > 30).length;
+    const top3 = sentences
+      .map((s, i) => ({ s, w: lengths[i] }))
+      .sort((a, b) => b.w - a.w)
+      .slice(0, 3)
+      .filter(x => x.w > 25)
+      .map(x => `${x.w}w: "${x.s.length > 120 ? x.s.slice(0, 120) + '…' : x.s}"`);
+    const fix10 = 'Split the longest sentences into 2–3 discrete claims; target an average under 20 words and avoid parenthetical asides over 5 words. ' +
+      (top3.length ? 'Longest: ' + top3.join(' | ') : '');
+    if (avg > 24 || longCount > 5) {
+      push(10, 'Sentence Discipline', 'FAIL', `avg ${avg.toFixed(0)} words, ${longCount} sentence(s) > 30 words`,
+        'Sentences run long, which buries extractable claims.', fix10);
+    } else if (avg >= 20 || longCount >= 3) {
+      push(10, 'Sentence Discipline', 'WARNING', `avg ${avg.toFixed(0)} words, ${longCount} sentence(s) > 30 words`,
+        'Average sentence length is creeping up — tighten for cleaner standalone claims.', fix10);
+    } else {
+      push(10, 'Sentence Discipline', 'PASS', `avg ${avg.toFixed(0)} words, ${longCount} sentence(s) > 30 words`,
+        'Sentences are short and discrete — each can stand alone as an extractable claim.');
+    }
+  }
+
+  // ── Aggregate score + grade ──
+  const passCount = checks.filter(c => c.verdict === 'PASS').length;
+  const warningCount = checks.filter(c => c.verdict === 'WARNING').length;
+  const failCount = checks.filter(c => c.verdict === 'FAIL').length;
+  const grade = passCount >= 9 ? 'A' : passCount >= 7 ? 'B' : passCount >= 5 ? 'C' : passCount >= 3 ? 'D' : 'F';
+
+  // Priority fixes — ordered by impact (callouts → takeaways → title → product → opening → …)
+  const impactOrder = [8, 4, 1, 9, 5, 6, 10, 7, 2, 3];
+  const priorityFixes = impactOrder
+    .map(id => checks.find(c => c.id === id))
+    .filter(c => c && (c.verdict === 'FAIL' || c.verdict === 'WARNING'))
+    .slice(0, 3)
+    .map(c => `${c.label} (${c.verdict})`);
+
+  return {
+    score: passCount,
+    maxScore: 10,
+    grade,
+    passCount,
+    warningCount,
+    failCount,
+    priorityFixes,
+    checks
+  };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

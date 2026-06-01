@@ -54,3 +54,55 @@ export async function getAccessToken() {
     return null
   }
 }
+
+// ─── 401 recovery helpers (used by authFetch) ────────────────────────────────
+// When the server rejects a request with 401 ("jwt expired"), authFetch calls
+// forceReacquireToken() once to refresh silently; if that fails it calls
+// redirectToLogin() to send the user back through Microsoft sign-in.
+
+let _reacquireInFlight = null
+let _redirectingToLogin = false
+
+/**
+ * Force MSAL to issue a fresh idToken (bypasses the local cache). Coalesces
+ * parallel callers so we don't fire multiple refreshes when several API calls
+ * 401 at the same time. Returns the new idToken, or null if refresh failed
+ * (e.g. the refresh token is also expired).
+ */
+export async function forceReacquireToken() {
+  if (_reacquireInFlight) return _reacquireInFlight
+  _reacquireInFlight = (async () => {
+    try {
+      const accounts = msalInstance.getAllAccounts()
+      if (accounts.length === 0) return null
+      const response = await msalInstance.acquireTokenSilent({
+        ...loginRequest,
+        account: accounts[0],
+        forceRefresh: true,
+      })
+      return response.idToken || null
+    } catch {
+      return null
+    } finally {
+      // Release on the next tick so concurrent 401s within the same flush share the result
+      setTimeout(() => { _reacquireInFlight = null }, 100)
+    }
+  })()
+  return _reacquireInFlight
+}
+
+/**
+ * Send the user through interactive Microsoft sign-in. Guarded so simultaneous
+ * 401s only trigger one redirect.
+ */
+export async function redirectToLogin() {
+  if (_redirectingToLogin) return
+  _redirectingToLogin = true
+  try {
+    await msalInstance.loginRedirect(loginRequest)
+  } catch {
+    // Redirect failed — hard-reload as a last resort so the app re-enters the
+    // login flow from a clean slate.
+    try { window.location.assign(window.location.origin) } catch { /* ignore */ }
+  }
+}

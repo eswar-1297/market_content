@@ -547,22 +547,76 @@ function renderInlineMarkdown(text) {
 function MessageText({ text, isBot }) {
   if (!text) return null
   const content = typeof text === 'string' ? text : JSON.stringify(text, null, 2)
-
   const lines = content.split('\n')
+
+  // Pre-pass: group consecutive markdown-table rows into a single block so we can
+  // render them as a real <table> instead of leaking raw "| col | col |" text.
+  const isTableRow = (s) => /^\s*\|.*\|\s*$/.test(s)
+  const isSeparator = (s) => /^\s*\|?\s*:?-{3,}:?(\s*\|\s*:?-{3,}:?)+\s*\|?\s*$/.test(s)
+  const splitRow = (s) => s.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map(c => c.trim())
+
+  const blocks = []
+  let i = 0
+  while (i < lines.length) {
+    if (isTableRow(lines[i]) && i + 1 < lines.length && isSeparator(lines[i + 1])) {
+      const headers = splitRow(lines[i])
+      const rows = []
+      i += 2
+      while (i < lines.length && isTableRow(lines[i]) && !isSeparator(lines[i])) {
+        rows.push(splitRow(lines[i]))
+        i++
+      }
+      blocks.push({ type: 'table', headers, rows })
+    } else {
+      blocks.push({ type: 'line', text: lines[i] })
+      i++
+    }
+  }
+
   return (
     <div className="space-y-1.5">
-      {lines.map((line, i) => {
-        if (!line.trim()) return <div key={i} className="h-1" />
+      {blocks.map((b, idx) => {
+        if (b.type === 'table') {
+          return (
+            <div key={idx} className="overflow-x-auto my-2">
+              <table className="w-full text-sm border-collapse">
+                <thead>
+                  <tr className={isBot ? 'bg-gray-100 dark:bg-gray-800' : 'bg-white/10'}>
+                    {b.headers.map((h, hi) => (
+                      <th key={hi} className="border border-gray-300 dark:border-gray-600 px-2 py-1 text-left font-semibold align-top">
+                        {renderInlineMarkdown(h)}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {b.rows.map((row, ri) => (
+                    <tr key={ri} className={ri % 2 ? (isBot ? 'bg-gray-50 dark:bg-gray-900/40' : 'bg-white/5') : ''}>
+                      {row.map((cell, ci) => (
+                        <td key={ci} className="border border-gray-300 dark:border-gray-600 px-2 py-1 align-top">
+                          {renderInlineMarkdown(cell)}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )
+        }
+
+        const line = b.text
+        if (!line.trim()) return <div key={idx} className="h-1" />
 
         if (line.startsWith('### ')) {
-          return <p key={i} className="font-semibold text-sm mt-2">{renderInlineMarkdown(line.replace('### ', ''))}</p>
+          return <p key={idx} className="font-semibold text-sm mt-2">{renderInlineMarkdown(line.replace('### ', ''))}</p>
         }
         if (line.startsWith('## ')) {
-          return <p key={i} className="font-bold text-sm mt-2">{renderInlineMarkdown(line.replace('## ', ''))}</p>
+          return <p key={idx} className="font-bold text-sm mt-2">{renderInlineMarkdown(line.replace('## ', ''))}</p>
         }
         if (line.startsWith('- ') || line.startsWith('• ')) {
           return (
-            <div key={i} className="flex items-start gap-1.5 ml-1">
+            <div key={idx} className="flex items-start gap-1.5 ml-1">
               <span className={`mt-2 w-1 h-1 rounded-full flex-shrink-0 ${isBot ? 'bg-gray-400' : 'bg-white/60'}`} />
               <span>{renderInlineMarkdown(line.replace(/^[-•]\s/, ''))}</span>
             </div>
@@ -570,7 +624,7 @@ function MessageText({ text, isBot }) {
         }
         if (/^\d+\.\s/.test(line)) {
           return (
-            <div key={i} className="flex items-start gap-1.5 ml-1">
+            <div key={idx} className="flex items-start gap-1.5 ml-1">
               <span className={`font-semibold flex-shrink-0 ${isBot ? 'text-indigo-500' : 'text-white/80'}`}>
                 {line.match(/^\d+/)[0]}.
               </span>
@@ -579,7 +633,7 @@ function MessageText({ text, isBot }) {
           )
         }
 
-        return <p key={i}>{renderInlineMarkdown(line)}</p>
+        return <p key={idx}>{renderInlineMarkdown(line)}</p>
       })}
     </div>
   )

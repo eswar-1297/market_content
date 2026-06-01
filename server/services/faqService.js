@@ -570,6 +570,59 @@ export async function scrapePage(url) {
   };
 }
 
+/**
+ * Isolate the main article body from a full page's raw HTML, stripping site
+ * chrome (nav, header, footer, sidebars, related-posts, comments, share/social,
+ * cookie/newsletter widgets). Returns clean HTML the rule engine can score
+ * without contamination from the rest of the page. Fails open — returns the
+ * original HTML if extraction goes wrong, so an audit never breaks.
+ *
+ * The page's <meta name="author"> tag is preserved (prepended) so the byline
+ * check still works even when only a content container is extracted.
+ */
+export function extractArticleHtml(rawHtml) {
+  if (!rawHtml || typeof rawHtml !== 'string') return rawHtml || '';
+  try {
+    const $ = cheerio.load(rawHtml);
+
+    // Preserve the author meta tag (lives in <head>, lost once we extract a body region)
+    const metaAuthor = $('meta[name="author"]').attr('content')
+      || $('meta[property="article:author"]').attr('content') || '';
+    const metaHtml = metaAuthor ? `<meta name="author" content="${metaAuthor.replace(/"/g, '&quot;')}">` : '';
+
+    // 1) SELECT the main content container FIRST — prefer <article>/<main>, then
+    //    common WP/theme content classes. Take the longest match so "related post"
+    //    stubs don't win over the real body. (Selecting before pruning avoids the
+    //    trap where broad attribute selectors delete a wrapper that holds the body.)
+    const selectors = [
+      'article', 'main',
+      '.entry-content', '.post-content', '.td-post-content',
+      '.elementor-widget-theme-post-content', '.single-post-content',
+      '[class*="post-content"]', '[class*="entry-content"]'
+    ];
+    let bestEl = null, bestLen = 0;
+    for (const sel of selectors) {
+      $(sel).each((_, el) => {
+        const len = $(el).text().replace(/\s+/g, ' ').trim().length;
+        if (len > bestLen) { bestLen = len; bestEl = el; }
+      });
+      if (bestEl && bestLen > 400) break;   // a high-priority container is good enough
+    }
+    const container = (bestEl && bestLen > 200) ? $(bestEl) : $('body');
+
+    // 2) Clean chrome WITHIN the container only — never the container itself, so an
+    //    aggressive selector can't wipe the body out from under us.
+    container.find('script, style, noscript, nav, header, footer, aside, form, svg, iframe').remove();
+    container.find('.sidebar, .menu, .nav, .navbar, .advertisement, .ad, .ads, .breadcrumb, .breadcrumbs').remove();
+    container.find('[class*="related"], [class*="widget"], [class*="comment"], [id*="comment"], [class*="share"], [class*="social"], [class*="newsletter"], [class*="subscribe"], [class*="popup"], [class*="modal"], [class*="cookie"], [role="navigation"], [role="complementary"]').remove();
+
+    const bodyHtml = $.html(container);
+    return (bodyHtml && bodyHtml.trim()) ? (metaHtml + bodyHtml) : rawHtml;   // fail open
+  } catch {
+    return rawHtml;   // fail open
+  }
+}
+
 // ═══ STEP 2: Discover questions from REAL sources + AI supplement ═══
 
 export async function discoverQuestions(pageData, provider, apiKey) {

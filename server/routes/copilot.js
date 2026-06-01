@@ -166,6 +166,18 @@ router.post('/chat', async (req, res) => {
 
     console.log(`[CHAT] articleStep found: ${!!articleStep} | generatedArticle length: ${generatedArticle?.length || 0}`);
 
+    // If analyze_content_structure produced a preformatted_review, send it verbatim
+    // to chat. This bypasses small-model agents that tend to summarize the structured
+    // tool result instead of obeying the "output verbatim" directive — guaranteeing
+    // the writer sees the full report with concrete rewrites, not a paraphrase.
+    const analyzeStep = (agentResult.toolsUsed || []).find(t =>
+      (t.tool === 'analyze_content_structure' || t.tool === 'audit_published_article')
+      && t.result?.preformatted_review);
+    if (analyzeStep) {
+      content = String(analyzeStep.result.preformatted_review).trim();
+      console.log(`[CHAT] Overriding agent text with preformatted_review (${content.length} chars)`);
+    }
+
     const reqSteps = (agentResult.toolsUsed || []).filter(t => t.tool === 'update_article_requirements' && t.result?.requirements);
     let requirementsUpdate = null;
     if (reqSteps.length > 0) {

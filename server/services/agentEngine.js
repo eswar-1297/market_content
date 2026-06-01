@@ -4,7 +4,7 @@ import { analyzeContent } from './ruleEngine.js';
 import { searchChunks } from '../db/copilotDb.js';
 import { getTodayTopicForWriter } from './contentCalendarService.js';
 import { suggestYouTubeVideos, searchG2Reviews, suggestTablesAndInfographics } from './agentTools.js';
-import { discoverQuestions, prioritizeQuestions, generateSemanticKeywords, scrapePage, analyzeGaps } from './faqService.js';
+import { discoverQuestions, prioritizeQuestions, generateSemanticKeywords, scrapePage, analyzeGaps, extractArticleHtml } from './faqService.js';
 import { generateFanoutQueries } from './fanoutService.js';
 import { searchReddit } from './threadFinder/reddit.js';
 import { crossReferenceQuoraSearch } from './threadFinder/crossReferenceQuora.js';
@@ -15,10 +15,21 @@ import { checkAIDetection, checkPlagiarism, isCopyleaksConfigured, isPlagiarismC
 import { searchAndFetchContent, listPages, getPageByUrl, isSharePointConfigured } from './sharepointService.js';
 import { getWriterBio, formatWriterBioForPrompt } from '../config/writerBios.js';
 import { formatBlogPatternsForPrompt, formatWriterPatternsForPrompt } from '../config/blogPatterns.js';
-import { htmlToMarkdown } from '../utils/contentParser.js';
+import { htmlToMarkdown, extractHeadings, extractParagraphs, stripHtml } from '../utils/contentParser.js';
 import { ICP_FRAMEWORK } from '../utils/copilotPrompts.js';
 import { startTrace, flushLangfuse } from './langfuseService.js';
 import { getLearnedRulesPrompt, addLearnedRule } from './feedbackLearningService.js';
+
+// ═══ COMPETITOR POLICY ═══
+// Competitor migration/SaaS tools must never be surfaced (e.g. in suggested
+// keywords). Source/destination platforms (Google Drive, OneDrive, etc.) are fine.
+const COMPETITOR_RE = /\b(multcloud|mover\.io|movebot|cloudhq|cloud hq|odrive|insync|cloudiway|sharegate|bittitan|gs richcopy|carbonite|zapier)\b/i;
+function dropCompetitorKeywords(arr) {
+  return (arr || []).filter(k => {
+    const text = typeof k === 'string' ? k : (k?.keyword || k?.phrase || '');
+    return !COMPETITOR_RE.test(text);
+  });
+}
 
 // ═══ INTERNAL LLM — Claude primary, OpenAI fallback ═══
 // The user-selected model (OpenAI/Gemini/Ollama) is used for the agent loop (chat + tool calling).
@@ -78,6 +89,353 @@ function getInternalProvider() {
   return null;
 }
 
+// Render the finished content-review report (with CONCRETE rewrites) using the
+// strong internal model, so review quality doesn't depend on the user's chat
+// provider. Returns Markdown, or null if rendering fails (caller falls back to
+// letting the chat agent compose from the structured data).
+async function renderReviewWithClaude(reviewData, articleText, topic) {
+  const system = `You are CloudFuze's senior content reviewer. You turn a structured analysis into ONE finished Markdown review report for the writer — with CONCRETE rewrites, never generic advice.
+
+Hard rules:
+- For every issue, quote the EXACT offending text from the article, then show a specific rewrite. NEVER say "tighten this" without showing the rewritten version.
+- Use the provided scores/verdicts as-is; do not recompute them.
+- Be honest — do not pass a check just because the article reads well.
+- The AI-Readiness rubric is advisory (suggestions, not blocking gates).
+- NEVER name competitor tools (MultCloud, Cloudiway, Mover.io, Movebot, ShareGate, BitTitan, etc.).
+- Output ONLY the Markdown report — no preamble like "here is your review".`;
+
+  const data = {
+    overallScore: reviewData.overallScore,
+    categories: reviewData.categories,
+    failingChecks: reviewData.failingChecks,
+    topSuggestions: reviewData.topSuggestions,
+    icpAlignment: reviewData.icpAlignment,
+    readability: reviewData.readability,
+    formatting: reviewData.formatting,
+    grammar: reviewData.grammar,
+    coveredQuestions: reviewData.coveredQuestions,
+    missingQuestions: reviewData.missingQuestions,
+    semanticKeywords: reviewData.semanticKeywords,
+    suggestedMissingSections: reviewData.suggestedMissingSections,
+    aiReadiness: reviewData.aiReadiness
+  };
+
+  const air = reviewData.aiReadiness || {};
+
+  // Lock each rubric subsection's heading + Current line to the engine's ground
+  // truth. The renderer model only fills the per-check <FILL_FIX_N> body with
+  // the concrete, example-driven Suggested Fix — so labels, verdicts, and
+  // ordering cannot drift, while the rewrite content stays rich.
+  const verdictIcon = v => v === 'PASS' ? '✅ PASS' : v === 'WARNING' ? '⚠️ WARNING' : v === 'FAIL' ? '❌ FAIL' : v;
+  const safeCur = s => String(s ?? '').replace(/[\r\n]+/g, ' ').slice(0, 400);
+  const rubricSubsections = (air.checks || []).map(c =>
+    `### ${c.id}. ${c.label} — ${verdictIcon(c.verdict)}\n**Current:** ${safeCur(c.current)}\n\n<FILL_FIX_${c.id}>`
+  ).join('\n\n');
+
+  const user = `ARTICLE (quote exact text from here and write the rewrites):
+"""
+${articleText}
+"""
+
+STRUCTURED ANALYSIS (JSON — use these scores/verdicts, do not recompute):
+"""
+${JSON.stringify(data, null, 1)}
+"""
+
+Produce the review with these ## sections in order, using ✅ / ⚠️ / ❌ markers:
+
+## CSABF Score & Structural Issues
+Overall + category scores. Each failing check: the issue and a concrete fix.
+
+## ICP Alignment
+Total score, tier, the 5-category breakdown (Company Size /35, Geography /35, Industry /10, Technology /10, Buyer Persona /10) with hits and a specific fix to raise each weak category.
+
+## GEO Citability & AI Visibility
+Per section: self-contained answer blocks? subjects named (no dangling "it/this")? definition patterns? statistics? question-format headings? extractable lists/tables? Quote 3–5 EXACT weak sentences and rewrite each.
+
+## E-E-A-T Signals
+Experience, Expertise, Authoritativeness, Trustworthiness — what's missing and specific additions.
+
+## Readability
+Report each readability metric, pass/fail, and a fix where failing.
+
+## Grammar & Tone
+Quote exact passive / marketing / vague sentences and give corrected versions.
+
+## Formatting
+Paragraph lengths, heading structure, lists, subheading gaps — exact locations + fixes.
+
+## FAQ Gap Analysis
+Covered questions, then missing ones ranked; mark HIGH PRIORITY (appearsInBoth=true) and say WHERE each missing question should go.
+
+## Semantic Keywords
+Target keywords the content should include but doesn't.
+
+## Suggested Missing Sections
+From suggestedMissingSections — why each matters and where it should go.
+
+## AI-Readiness Rubric (10 Checks)
+Start with: **Overall AI-Readiness: ${air.score ?? '?'}/10 — Grade ${air.grade ?? '?'}**
+Then output a short **Priority Fixes:** bullet list using aiReadiness.priorityFixes.
+
+Then output the 10 subsections BELOW exactly. The "### N. Label — VERDICT" heading line and the "**Current:**" line are GROUND TRUTH — reproduce them VERBATIM (do NOT rename a check, change a verdict, merge, reorder, or skip any subsection). Replace each "<FILL_FIX_N>" placeholder with a concrete, example-driven Suggested Fix for that check. Use plain Markdown paragraphs and bullet/blockquote formatting — do NOT put any of this content back into a table.
+
+${rubricSubsections}
+
+How to fill each <FILL_FIX_N>:
+
+- ✅ PASS subsections → ONE line: "✅ Already meets the rubric — no action needed."
+- ⚠️ WARNING / ❌ FAIL subsections → write the rich fix in 2–5 short paragraphs. ALWAYS quote the article's EXACT offending text (verbatim, inside quotes) and show the rewritten version under a "**Rewrite:**" line OR a clearly labelled "**Before:** / **After:**" block. Never give generic advice without a concrete example pulled from THIS article.
+
+Per-check requirements (only apply when verdict is WARNING or FAIL):
+
+- **1. Title Pattern** → Show 2 candidate rewrites as "**Option A:**" / "**Option B:**". Both must open with an action verb ("How to…", "A Practical Playbook for…", "Step-by-Step Guide to…"), name the specific outcome + audience, and stay under ~80 chars. Add one short line explaining which option targets which ICP buyer (Core ICP / Strong ICP).
+- **2. Author Byline** → Show the byline as it should appear: \`[Author Name], [Role]\` with a link such as \`/author/[slug]/\`. Use the real author from the article (e.g. "Pankaj Rai") if visible; suggest "Content Strategist" as the role unless the article suggests otherwise.
+- **3. Reading Time** → Suggest the exact label text (e.g., "5 min read") and exactly where to place it (under the title, above the byline). Reference the engine's word-count estimate.
+- **4. Key Takeaways Block** → Draft a complete 5-bullet Key Takeaways block. Each bullet 8–15 words, each a complete subject-verb-object claim, each pulled from a real point made in the article (not invented).
+- **5. Opening Paragraph** → Provide a full **Before:** / **After:** rewrite. AFTER must be ≤60 words, 1–2 sentences, end on tension / a question, and avoid hedge openers ("Nowadays", "In today's world", "In the ever…").
+- **6. Question-format H2** → Pick 2–3 existing H2s from the article and show their conversion to question form ending with "?". Format each as a "Before → After" pair.
+- **7. Numbered Step Subheads** → Draft 3–5 example step subheads using "Step N: [Action verb] [outcome] [with CloudFuze product]", tied to the article's actual workflow. List them as a numbered list.
+- **8. Key Principle / Bottom Line Callouts** → Draft 3 distinct "Key principle:" lines (8–15 words each, "X, not Y" construction). Tie each to a REAL H2 from the article — name the H2 first, then the principle line under it.
+- **9. Named Product Density** → Quote 2–3 generic references from the article (e.g., "our tool", "the platform", "our solution") verbatim, and show a specific-product rewrite for each using a real CloudFuze product name (CloudFuze Migrate / CloudFuze Manage / AI Chat Agent / Shadow IT Control / Shadow AI Governance / X-Change).
+- **10. Sentence Discipline** → Quote the 3 LONGEST sentences from the article (verbatim, in quotes) and show each split into 2–3 discrete claim sentences under a "**Rewrite:**" line.
+
+End the section with: "These are suggestions, not blocking gates — the writer makes the final call."
+
+Topic: "${topic}".`;
+
+  const out = await callClaude(system, user, { maxTokens: 10000, temperature: 0.4, timeout: 180000 });
+  return out ? out.trim() : null;
+}
+
+// ═══ PASSAGE-LEVEL AI AUDIT (v3) ═══
+// Audits UP TO 7 of the most-extractable sections of a CloudFuze page — ranked
+// by AI extraction likelihood (top 7 if more qualify; all of them if fewer) —
+// running the strict 4-criterion verdict test on each (Criterion 2 requires a
+// number / named competitor / measurable outcome; topic lists do not count),
+// then a page-level diagnosis and a fix-priority order. Renders the finished report
+// with the internal model (Claude → OpenAI fallback) so quality is independent
+// of the user's chat provider. This is NOT the full-article review
+// (analyze_content_structure) — it diagnoses extractable passages and returns
+// per-section directions. It never rewrites.
+async function renderPassageAuditWithClaude(articleText, { title = '', url = '', wordCount = null, dateStr = '' } = {}) {
+  const system = `You are a passage-level audit tool for CloudFuze blog content. Your job is to predict the TOP 7 sections of a published page that an AI engine (ChatGPT, Google AI Overview, AI Mode, Perplexity, Gemini, Claude) would most likely extract as a citation for different user queries, then evaluate whether each of those sections represents CloudFuze the way it should. Audit up to 7 sections (fewer if the page is thin); if more than 7 candidates clear the bar, audit only the top 7 by extraction likelihood.
+
+You produce per-section verdicts (A / B / C) and one-line directions for each, plus a page-level diagnosis identifying patterns across the audited sections. You diagnose. You do NOT rewrite — the writer applies the fixes themselves. You evaluate one page at a time, comprehensively.
+
+═══ THE FIVE AUDIT STEPS ═══
+
+STEP 1 — PARSE THE PAGE. Identify: Title (H1), author byline + read time if visible, Key Takeaways block if present, all H2 headings (in order), all H3 headings, numbered sections (Step 1 / 1. format), opening paragraph (first paragraph after H1 and any Key Takeaways block), closing paragraph (last paragraph before any CTA), and each H2 body section. If the input is too short, malformed, or is not a blog post, say so explicitly and stop.
+
+STEP 2 — IDENTIFY ALL AUDITABLE SECTION CANDIDATES. A section qualifies if it is any of: a Key Takeaways block at the top; the opening paragraph; the body of any H2 section; a specific numbered step/tip (treat each as a separate section); a clearly marked "Bottom Line"/"Summary"/"Key Principle" callout; an FAQ section (treat the FULL FAQ block as ONE section, not each Q&A separately); the closing paragraph (ONLY if it makes substantive claims, not just a CTA). SKIP (never auditable): image captions, hero subtitles/taglines, navigation/breadcrumb text, footer text or CTAs, author bio boxes, related-posts lists. List every candidate you found — this is your audit pool.
+
+STEP 3 — DECIDE WHICH CANDIDATES ARE REALISTICALLY EXTRACTABLE, THEN RANK THEM. AI engines extract passages, not whole pages. For each candidate, make a yes/no judgment: would an AI engine actually pull THIS block as a citation for some plausible query? Use these signals to decide and to rank the ones that clear the bar:
+- Self-containment (highest weight): reads alone and still makes sense; does not depend on "as mentioned above" context.
+- Length (high weight): AI engines extract ~100–300 words. <80 words usually skipped; >350 usually truncated. 130–200 words is optimal.
+- MINIMUM EXTRACTION ENFORCEMENT: if a candidate PROSE section is under 100 words, expand the extraction (the full paragraph it sits in plus the next paragraph, or the full H2 section) until it is 100–300 words. Do NOT audit prose fragments under 100 words — they are not realistic AI citations. If after expansion a prose section still cannot reach 100 words, EXCLUDE it from the audit pool. EXCEPTION: a Key Takeaways / bullet-summary block is a realistic AI citation at ANY length — quote it as-is, do not pad it.
+- Structural prominence (high weight): a Key Takeaways block at the top; an opening paragraph ending on a discrete claim/tension; the body of the first H2; any "Bottom Line/Summary/Key Principle" block; the first numbered step in a how-to.
+- Heading clarity (medium): question-format headings ("What is X?", "How do I Y?") rank higher than "Overview"/"Introduction".
+- Sentence density (medium): short declarative sentences (avg under 20 words) win.
+- Concrete signal density (medium): named products, specific numbers, named competitors, comparative claims rank higher than abstract prose.
+CAP — AUDIT UP TO 7 SECTIONS: if the page has fewer than 7 auditable sections, audit all of them and note the page was thin on extractable content; if it has more than 7, audit ONLY the top 7 by extraction-likelihood score. Still exclude any section an AI engine realistically wouldn't cite (too short after expansion, not self-contained, pure CTA/nav/boilerplate) — never pad to reach 7. ORDER the audited sections by extraction likelihood (most-likely first), NOT by page position. For each selected section, quote the full 100–300 word block VERBATIM — never summarize or paraphrase.
+
+STEP 4 — RUN THE 4-CRITERION VERDICT TEST on EACH selected section, independently. Ask: "If a buyer saw ONLY this section, would it represent CloudFuze the way we want?"
+
+CRITERION 1 — Named CloudFuze product present. ✅ PASS if the BODY names a specific product/feature: CloudFuze Migrate, CloudFuze Manage, AI Chat Agent, X-Change, or a named feature (Hyperlink Fixer, Shadow IT Control, Shadow AI Governance, Copilot Readiness, etc.). ❌ FAIL if it uses only generic references ("our migration tool", "the platform", "our solution", or "CloudFuze" alone without a product/feature). Mentions in headings, breadcrumbs, or CTAs do NOT count — the product must appear in the body text of the section.
+
+CRITERION 2 — Concrete signal (STRICT). The section must contain at least ONE of these; if none, ❌ FAIL:
+(a) A NUMERIC VALUE — a percentage ("60% fewer tickets"), a count ("10,000+ enterprises", "40 cloud platforms"), a dollar amount ("$2.5M saved"), or a time duration ("in under 72 hours", "across a single weekend"). Round numbers like "100"/"1,000" count only if they describe a specific countable thing, not as marketing flourish.
+(b) A NAMED COMPETITOR OR NAMED ALTERNATIVE PRODUCT — Sharegate, BitTitan, MigrationWiz, AvePoint, Cloudiway, Cloudficient, MultCloud, Microsoft Purview, Microsoft Admin Center, Azure Migrate, native M365 tools, etc. Generic comparisons ("other migration tools", "competitors") do NOT count.
+(c) A SPECIFIC MEASURABLE OUTCOME — names what changes, in what direction, by how much, or in what timeframe (PASS: "reduces post-migration support tickets by roughly 60%"; FAIL: "delivers better outcomes").
+STRICT: lists of problem categories, feature names, or capability descriptions do NOT count. A bullet list like "user adoption, AI governance, content sprawl, shadow IT" is topic enumeration, NOT a concrete signal. Be honest — do not pass Criterion 2 just because the section has bullets or names topics.
+
+CRITERION 3 — Substantively complete claim. ✅ PASS if the section tells the reader something specific about the world (e.g. "CloudFuze rebuilds the inherited permission tree during cross-tenant moves"). ❌ FAIL if it is a CTA/exhortation ("Leverage our services to establish proper governance"), a brand statement ("CloudFuze provides industry-leading solutions"), an instruction to use the product without explaining what it does, marketing fluff dressed as a claim, or a grammatically complete sentence that asserts nothing verifiable.
+
+CRITERION 4 — No marketing-adjective load-bearing. ❌ FAIL if the section leans on adjectives as the main signal of value: "seamless", "robust", "world-class", "best-in-class", "cutting-edge", "industry-leading", "comprehensive", "innovative", "smooth", "smoothly", "powerful", "advanced". ✅ PASS if such adjectives are absent OR appear only as flavor while concrete verbs/products/numbers do the actual work.
+
+VERDICT PER SECTION: A — STRONG (all 4 pass). B — FIXABLE (2 or 3 pass; 5–15 min edit reaches A). C — REWRITE REQUIRED (0 or 1 pass; needs a new AI-facing section or a major rewrite, 15–30 min).
+
+STEP 5 — GENERATE QUESTION-FORM DIRECTIONS + PAGE-LEVEL DIAGNOSIS.
+Per-section direction (one line each; you don't rewrite):
+- Verdict A: "No changes needed. Section is already extractable and on-brand."
+- Verdict B and C: the direction MUST do ONE of two things — pick the strongest available:
+  (a) EXACT REPLACEMENT — name the precise text to change, when you can be specific enough to be useful ("Replace 'hundreds of enterprises' with '10,000+ enterprises'." / "Replace the closing 'leverage our services to establish governance' with 'CloudFuze Manage automates Copilot adoption tracking, license cost analysis, and Shadow IT detection across the Microsoft 365 tenant.'" / "Add this sentence: 'Unlike Microsoft Purview, CloudFuze Manage surfaces department-wise Copilot adoption and real-time license cost breakdowns.'").
+  (b) SPECIFIC QUESTION TO ANSWER — when you can't name exact text, pose the question the writer must answer, and the question MUST name specifics (which mechanism, which competitor, which outcome, which number). E.g. "Add a sentence answering: which 2-3 challenges from this list (user adoption, AI governance, content sprawl) does CloudFuze Manage solve, and what's the mechanism — automated discovery, policy enforcement, or remediation?" / "Add a sentence answering: what specific implementation issue does CloudFuze migration support handle that Microsoft's own paid support doesn't?"
+  For a Verdict C, the direction is typically architectural — WHAT to add, WHERE, and WHY — but it must still meet the specifics bar below.
+BANNED direction formats — never produce these: "Add a sentence about how CloudFuze addresses these challenges." / "Add a specific outcome metric." / "Add a sentence about CloudFuze's role." / "Improve credibility." / "Enhance the impact." / "Make it more specific." / "Strengthen the claim." / "Mention CloudFuze." RULE: if you find yourself writing "Add a sentence about [topic]", STOP and convert it to "Add a sentence answering: [specific question naming a mechanism, competitor, outcome, or number]".
+SPECIFICS BAR — every Verdict B and C direction MUST name at least one of: a specific competitor/alternative (Sharegate, BitTitan, Microsoft Purview, native admin tools, …); a specific mechanism (automated discovery, policy enforcement, permission rebuilding, …); a specific outcome to quantify (tickets reduced, hours saved, % improved, …); or a specific CloudFuze feature/capability. NEVER invent a statistic — only cite numbers already present verbatim in the article; otherwise use option (b) and ask for the figure. If a direction names none of these specifics, rewrite it before outputting.
+Page-level diagnosis (after auditing all sections, look across results):
+- DOMAIN-WIDE failure pattern: if 3+ sections fail the SAME criterion, surface it as a systemic issue (fixing sections one-by-one won't solve the root cause).
+- SCATTERED failures: sections fail different criteria with no pattern → individual section issues, no domain-wide problem.
+- STRONG page: if all or nearly all sections pass, confirm it's in good shape and name the weakest section as the only candidate for further sharpening.
+Fix priority order: Verdict C first (highest impact), and among Cs the highest-ranked (most likely to be extracted) first; then Verdict B sections in extraction-likelihood order. Sum the estimated fix times.
+
+═══ OPERATIONAL RULES ═══
+- Audit UP TO 7 sections. Fewer than 7 auditable → audit all and note the page was thin. More than 7 → audit only the top 7 by extraction-likelihood score. Never pad to reach 7: a section an AI engine wouldn't realistically cite stays out of the pool.
+- Order audited sections by extraction likelihood, NOT page position. The most-likely-extracted section is always Section 1.
+- NEVER stop early. Audit the full set (up to 7, or all available if fewer), even if Section 1 is Verdict A — the page-level diagnosis needs the full picture.
+- Quote each audited section VERBATIM — never summarize or paraphrase; the writer must recognize their own text.
+- Criterion 2 is strict: lists of problem categories, feature names, or capability descriptions do NOT count. The section needs a numeric value, a named competitor, or a measurable outcome. Don't pass it just because the section has bullets or names topics.
+- Every direction must name specifics. Generic directions ("add a sentence about X", "improve this", "make it stronger", "add a metric") are banned. Every Verdict B/C direction must name a specific competitor, mechanism, outcome to quantify, or feature. If you can't name an exact change, pose a specific question — never a vague instruction.
+- Do NOT rewrite, even when the verdict is C.
+- Default to the STRICTER verdict when a criterion is genuinely ambiguous.
+- Honor borderline cases — if a criterion is ambiguous (e.g. "CloudFuze" appears only in a heading, not the body), explain it and pick the verdict an AI engine would actually produce.
+- Do NOT grade voice or topic choice — only structural extractability. On-brand writing missing one criterion is still Verdict B.
+- NEVER name competitor migration/SaaS tools as alternatives (MultCloud, Mover.io, Movebot, CloudHQ, odrive, Insync, Cloudiway, ShareGate, BitTitan, etc.). A named competitor used in a comparison the article already makes is fine to quote, but never introduce one.
+
+═══ MANDATORY SELF-CHECK (run silently per section BEFORE writing; do NOT output this reasoning) ═══
+1. Word count: is each extraction a realistic citation? Prose under 100 words must be expanded or excluded; a Key Takeaways block is fine as-is. A 2–3 sentence prose quote is NEVER acceptable.
+2. Criterion 2 is STRICT: before marking it ✅, point to the exact number, named competitor, or measurable outcome. A list of topics/features/challenges is NOT a concrete signal → ❌.
+3. Criterion 3: if a load-bearing sentence uses an instruction/invitation verb aimed at the reader — "leverage our…", "reach out", "get started", "contact us", "establish proper governance", "make your … a success", "trust CloudFuze to…", "choose CloudFuze for…" — it is a CTA → Criterion 3 FAILS. It passes ONLY when the sentence states a verifiable fact about what CloudFuze does (e.g. "CloudFuze Manage flags shadow SaaS apps that bypass IT approval").
+4. Direction: no generic phrasing ("add a sentence about X" is banned), no invented numbers. Use exact text (option a) or a specific question that names a mechanism/competitor/outcome/feature (option b).
+
+═══ CALIBRATION EXAMPLES (internalize the reasoning; do NOT quote these back) ═══
+EXAMPLE 1 — Key Takeaways block with brand statements but no concrete signals. Content: "CloudFuze provides post-migration governance and SaaS/AI app management solutions. Post-migration governance involves establishing governance on the Microsoft 365 platform after migration completion. Challenges during implementation include user adoption issues, AI governance readiness, content sprawl, etc."
+- C1 ✅ (CloudFuze named — borderline, only generic, but passes). C2 ❌ (no number/competitor/outcome — the challenge list is topic enumeration). C3 ❌ ("CloudFuze provides X solutions" is a brand statement, not a verifiable claim). C4 ✅.
+→ Verdict B (2 of 4). Direction: "Add a sentence answering: which specific Microsoft 365 governance gap does CloudFuze Manage close that native admin tools (Microsoft Purview, Microsoft Admin Center) don't — name the gap and the CloudFuze mechanism."
+EXAMPLE 2 — H2 body listing challenges, no CloudFuze positioning. Content: "Here are major challenges during Microsoft 365 implementation: user adoption issues, AI governance readiness, content sprawl, duplicate content and stale permissions, inactive sites and shadow IT."
+- C1 ❌ (no product). C2 ❌ (list of topics). C3 ❌ (no verifiable claim). C4 ✅.
+→ Verdict C (1 of 4). Direction: "Add a sentence answering: which 2-3 challenges from this list does CloudFuze Manage solve, and what's the mechanism — automated discovery, policy enforcement, or remediation? Place it immediately after the bullet list."
+EXAMPLE 3 — strong section with named competitor + specific capability. Content: "A compliance tool like Microsoft Purview provides user audit logs, sensitivity label enforcement, and eDiscovery support. But it doesn't show you department-wise Copilot adoption, real-time Microsoft 365 license cost breakdowns, etc. With CloudFuze Manage, you get clear visibility of your Copilot environment, data access controls, usage visibility, and audit-readiness to scale Copilot without any hassle."
+- C1 ✅ (CloudFuze Manage). C2 ✅ (Microsoft Purview named + specific gap: department-wise Copilot adoption, real-time license cost breakdowns). C3 ✅ (verifiable claim about what Purview lacks and what Manage provides). C4 ✅ ("clear visibility", "without any hassle" are mild, don't load-bear).
+→ Verdict A. Direction: "No changes needed. Section is already extractable and on-brand."
+
+═══ OUTPUT FORMAT (produce EXACTLY this, in Markdown, nothing before or after) ═══
+
+# Passage Audit: [Page Title]
+
+**URL:** [URL or "Content pasted directly"]
+**Date audited:** [date]
+**Article length:** [approximate word count]
+**Auditable sections found:** [N]
+**Sections audited:** [up to 7, ordered by extraction likelihood]
+
+---
+
+## Section 1 — Most Likely AI Extraction
+
+> [Quote the full 100–300 word section verbatim]
+
+**Why this section scored highest:** [1–2 sentences naming the specific signals — e.g. "Key Takeaways block at top + 145 words + complete claims."]
+
+| Criterion | Result |
+|---|---|
+| Named CloudFuze product present | ✅ / ❌ — [brief note if ❌] |
+| Concrete signal (number, competitor, or measurable outcome) | ✅ / ❌ — [brief note if ❌] |
+| Substantively complete claim | ✅ / ❌ — [brief note if ❌] |
+| No marketing-adjective load-bearing | ✅ / ❌ — [brief note if ❌] |
+
+**Verdict: A / B / C**
+
+**Direction:** [Specific actionable instruction per the Step 5 rules]
+
+**Estimated fix time:** [None / 5-15 min / 15-30 min]
+
+---
+
+## Section 2 — [the section's actual heading or a short label like "Opening paragraph"]
+
+> [Quote the full 100–300 word section verbatim]
+
+**Why this section scored:** [1 sentence on the signal]
+
+| Criterion | Result |
+|---|---|
+| Named CloudFuze product present | ✅ / ❌ |
+| Concrete signal (number, competitor, or measurable outcome) | ✅ / ❌ |
+| Substantively complete claim | ✅ / ❌ |
+| No marketing-adjective load-bearing | ✅ / ❌ |
+
+**Verdict: A / B / C**
+
+**Direction:** [Specific actionable instruction]
+
+**Estimated fix time:** [None / 5-15 min / 15-30 min]
+
+---
+
+[Continue with one block per remaining audited section — Sections 3 through 7 (or however many qualify, up to 7) — each headed "## Section N — [its actual heading or short label]" and following the SAME format. NEVER leave a literal placeholder in a heading — always replace it with the real section label.]
+
+---
+
+## Page-Level Diagnosis
+
+**Pattern across sections:** [Domain-wide failure / scattered failures / strong page — pick one and explain in 1–2 sentences]
+
+**Section verdict summary:** [one line per audited section, up to 7]
+- Section 1: [A/B/C]
+- Section 2: [A/B/C]
+- … (continue for every audited section, up to Section 7)
+
+---
+
+## Recommended Fix Priority Order
+
+1. [Highest-priority section + brief why]
+2. [Next-priority section + brief why]
+[etc.]
+
+**Total estimated fix time:** [sum of all individual fix times]
+
+---
+
+## Notes (optional, only if relevant)
+
+[Only if something important doesn't fit elsewhere — e.g. "The page is thin on extractable sections (only 3 found). Consider adding a Key Takeaways block at the top and breaking longer paragraphs into discrete H2 sections."]
+
+Output ONLY the report — no preamble like "here is your audit".`;
+
+  const user = `Audit this CloudFuze page. Run all five steps and audit UP TO 7 of the most-extractable sections (all of them if fewer than 7 qualify; the top 7 by extraction likelihood if more), ranked by extraction likelihood, then produce the report in the exact output format with a page-level diagnosis and fix-priority order.
+
+URL: ${url || 'Content pasted directly'}
+Detected title: ${title || '(unknown — derive the H1 from the content)'}
+Approximate word count: ${wordCount ?? '(compute from the content)'}
+Date audited: ${dateStr}
+
+ARTICLE CONTENT:
+"""
+${articleText}
+"""`;
+
+  // 5 verbatim 100–300 word quotes + 4 verdict tables + diagnosis + fix order
+  // needs a much larger budget than the single-section v1 report.
+  const out = await callClaude(system, user, { maxTokens: 9000, temperature: 0.3, timeout: 180000 });
+  return out ? out.trim() : null;
+}
+
+/**
+ * Build the same pageData shape scrapePage produces, but from editor HTML
+ * we already have in hand. Used when the writer asks to review their editor
+ * content — using their HTML preserves the Key Takeaways list, headings, and
+ * other structure that text-mode parsing loses.
+ */
+function buildPageDataFromHtml(html) {
+  if (!html) return null;
+  const headings = extractHeadings(html);
+  const h1 = headings.find(h => h.level === 1)?.text || '';
+  const paragraphs = extractParagraphs(html, 'html').filter(p => p.length > 20).slice(0, 30);
+  const existingFAQs = [];
+  let inFaq = false;
+  for (const h of headings) {
+    if (h.level === 2) inFaq = /faq|frequently|common\s+questions/i.test(h.text);
+    if (inFaq && h.level === 3 && /\?\s*$/.test(h.text)) existingFAQs.push(h.text.trim());
+  }
+  const plain = stripHtml(html);
+  const wordCount = plain.split(/\s+/).filter(Boolean).length;
+  return {
+    url: null,
+    title: h1 || 'Untitled',
+    h1,
+    headings,
+    paragraphs,
+    existingFAQs,
+    wordCount,
+    existingSchema: [],
+    hasFAQSchema: false,
+    summary: paragraphs.slice(0, 3).join(' ').slice(0, 1000)
+  };
+}
+
 // ═══ RESEARCH CACHE (10 min TTL) — avoids re-running FAQ+Fanout for same topic ═══
 const researchCache = new Map();
 const CACHE_TTL = 10 * 60 * 1000; // 10 minutes
@@ -128,6 +486,20 @@ export const AGENT_TOOLS_OPENAI = [
           content: { type: 'string', description: 'The article text content to analyze, OR a URL to a published article (e.g. https://cloudfuze.com/blog/...). The tool auto-detects URLs and scrapes them.' }
         },
         required: ['content']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'passage_audit',
+      description: "Run a CloudFuze PASSAGE-LEVEL AI citation audit on ONE page. Predicts the TOP 7 sections (ranked by AI extraction likelihood — all of them if fewer than 7 qualify, the top 7 if more) that an AI engine (ChatGPT, Google AI Overview, AI Mode, Perplexity, Gemini, Claude) would most likely extract as a citation, then evaluates EACH section on-brand using a strict 4-criterion test (returning a per-section Verdict A=strong / B=fixable / C=rewrite plus a question-form direction the writer applies), and finishes with a page-level diagnosis and a fix-priority order. It does NOT rewrite the article. This is DIFFERENT from analyze_content_structure (a full-article CSABF/ICP/GEO review). Call passage_audit ONLY when the writer explicitly asks for a \"passage audit\", \"passage-level audit\", \"which sections will AI quote / extract\", \"predicted extraction\", \"passage check\", or pastes a URL together with the phrase \"passage audit\". Works with THREE input sources: (1) a single URL (auto-scraped), (2) article content pasted into chat (markdown, HTML, or plain text), or (3) the article currently in the EDITOR — if the writer asks for a passage audit without pasting anything, call this tool and it reads the editor content automatically. When the writer's article is in the editor, pass its text as `content` if you have it, otherwise call with `content` empty and the tool will use the editor. One page per call.",
+      parameters: {
+        type: 'object',
+        properties: {
+          content: { type: 'string', description: 'A single CloudFuze URL to audit (auto-scraped), OR the full pasted article content (markdown, HTML, or plain text). Leave empty/omit to audit the article currently in the editor panel.' }
+        },
+        required: []
       }
     }
   },
@@ -612,6 +984,98 @@ export async function executeTool(toolName, args, writerId = 'default', articleR
       });
     }
 
+    case 'passage_audit': {
+      let rawContent = (args.content || args.url || '').toString().trim();
+      // Editor-panel content lives in articleRequirements, not in args — the writer
+      // can say "passage audit" with the article sitting in the editor.
+      const editorHTML = (articleRequirements?._currentHTML || '').toString();
+      if (!rawContent && !editorHTML) {
+        return JSON.stringify({ error: 'Provide a CloudFuze URL, paste the article content, or put the article in the editor, then ask for a passage audit.' });
+      }
+
+      try {
+        const isURL = /^https?:\/\/[^\s]+$/i.test(rawContent);
+        let articleText = rawContent;
+        let title = '';
+        let url = null;
+        let source = 'pasted';
+
+        // Decide whether to audit the editor's HTML. Use it when there's no
+        // pasted content, when the chat text is just a short instruction
+        // ("passage audit"), or when the pasted text closely matches the editor
+        // (so we keep the editor's real structure — Key Takeaways <ul>, headings).
+        const editorPlainText = editorHTML ? stripHtml(editorHTML) : '';
+        const useEditorHTML = !isURL && editorHTML.length > 50 && (
+          rawContent.length < 40 ||
+          (() => {
+            const editorWords = new Set(editorPlainText.toLowerCase().split(/\s+/).filter(w => w.length > 3));
+            const argWords = rawContent.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+            if (argWords.length === 0 || editorWords.size === 0) return false;
+            const overlap = argWords.filter(w => editorWords.has(w)).length;
+            return overlap / argWords.length > 0.5;
+          })()
+        );
+
+        if (isURL) {
+          url = rawContent;
+          source = 'url';
+          // Best-effort scrape for the title; the article body comes from the raw HTML.
+          try {
+            const pageData = await scrapePage(rawContent);
+            title = pageData?.h1 || pageData?.title || '';
+          } catch { /* title stays empty — the audit derives the H1 from the body */ }
+
+          const { default: axios } = await import('axios');
+          const { data: rawHtml } = await axios.get(rawContent, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+            timeout: 30000
+          });
+          // Isolate the article body so the audit ignores nav/sidebar/footer chrome.
+          articleText = htmlToMarkdown(extractArticleHtml(rawHtml));
+        } else if (useEditorHTML) {
+          // Editor content — convert the editor's HTML, preserving headings/lists.
+          source = 'editor';
+          title = extractHeadings(editorHTML).find(h => h.level === 1)?.text || '';
+          articleText = htmlToMarkdown(editorHTML);
+        } else if (/<[a-z][\s\S]*>/i.test(rawContent)) {
+          // Pasted HTML → convert to Markdown, preserving headings/lists.
+          title = extractHeadings(rawContent).find(h => h.level === 1)?.text || '';
+          articleText = htmlToMarkdown(rawContent);
+        } else {
+          // Markdown or plain text pasted in chat — use as-is, pull the H1 if present.
+          const m = rawContent.match(/^#\s+(.+)$/m);
+          title = m ? m[1].trim() : '';
+        }
+
+        articleText = (articleText || '').trim();
+        const wordCount = articleText.split(/\s+/).filter(Boolean).length;
+
+        // Too short / not a blog post — the spec says to say so and stop.
+        if (wordCount < 80) {
+          return JSON.stringify({
+            error: 'The content is too short or does not look like a blog post (under 80 words). Paste the full article text, put it in the editor, or give me a valid URL to audit.'
+          });
+        }
+
+        const dateStr = new Date().toISOString().slice(0, 10);
+        const audit = await renderPassageAuditWithClaude(articleText.slice(0, 16000), { title, url, wordCount, dateStr });
+        if (!audit) {
+          return JSON.stringify({ error: 'Passage audit failed to render. Try again, or paste the article content directly.' });
+        }
+
+        return JSON.stringify({
+          preformatted_audit: audit,
+          source,
+          url: url || null,
+          title: title || null,
+          wordCount,
+          instruction: 'The preformatted_audit field is the COMPLETE, finished passage audit covering up to 7 of the most-extractable sections plus a page-level diagnosis. Output it EXACTLY as-is, verbatim — do NOT summarize, truncate, reformat, re-order, drop sections, or add any commentary before or after it. Do NOT rewrite the article. If the writer pasted multiple URLs, this audit covers only the first one — tell them you run one full audit per page.'
+        });
+      } catch (e) {
+        return JSON.stringify({ error: 'Passage audit failed: ' + e.message });
+      }
+    }
+
     case 'analyze_content_structure': {
       let rawContent = (args.content || '').trim();
       if (rawContent.length < 20) return JSON.stringify({ error: 'Content too short to analyze.' });
@@ -629,7 +1093,22 @@ export async function executeTool(toolName, args, writerId = 'default', articleR
         let pageData = null;
         let sourceUrl = null;
 
-        // ═══ STEP 1: If URL, scrape the page to get content ═══
+        // Editor reviews: when the writer has content in the editor and the
+        // agent passed roughly that same content as args.content, prefer the
+        // editor's HTML. The HTML preserves the Key Takeaways <ul><li>, real
+        // heading levels, and other structure that gets lost when TipTap
+        // exports plain text (no markdown markers → bullets become paragraphs).
+        const editorHTML = articleRequirements?._currentHTML || '';
+        const editorPlainText = editorHTML ? stripHtml(editorHTML) : '';
+        const useEditorHTML = !isURL && editorHTML.length > 50 && (() => {
+          const editorWords = new Set(editorPlainText.toLowerCase().split(/\s+/).filter(w => w.length > 3));
+          const argWords = rawContent.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+          if (argWords.length === 0 || editorWords.size === 0) return false;
+          const overlap = argWords.filter(w => editorWords.has(w)).length;
+          return overlap / argWords.length > 0.5;   // args.content matches the editor → it's an editor review
+        })();
+
+        // ═══ STEP 1: Choose content source — URL fetch, editor HTML, or raw text ═══
         if (isURL) {
           sourceUrl = rawContent;
           pageData = await scrapePage(rawContent);
@@ -640,8 +1119,17 @@ export async function executeTool(toolName, args, writerId = 'default', articleR
             headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
             timeout: 30000
           });
-          csabfInput = rawHtml;
+          // Isolate the article body so CSABF + the AI-Readiness rubric score the
+          // post, not the nav/sidebar/footer/related-posts chrome around it.
+          csabfInput = extractArticleHtml(rawHtml);
           csabfMode = 'html';
+        } else if (useEditorHTML) {
+          // Use the editor's HTML directly — preserves headings, lists, and the
+          // Key Takeaways <ul><li> block that text-mode parsing would miss.
+          csabfInput = editorHTML;
+          csabfMode = 'html';
+          pageData = buildPageDataFromHtml(editorHTML);
+          textForICP = [pageData.h1 || '', ...(pageData.paragraphs || [])].join('\n');
         } else {
           // Build minimal pageData from editor text for FAQ/fanout pipelines
           const lines = rawContent.split('\n');
@@ -832,7 +1320,7 @@ export async function executeTool(toolName, args, writerId = 'default', articleR
         }));
 
         // ═══ STEP 6: Build unified response ═══
-        return JSON.stringify({
+        const reviewData = {
           source: isURL ? 'url' : 'editor',
           ...(sourceUrl && { url: sourceUrl }),
           title: pageData.title || pageData.h1 || null,
@@ -854,6 +1342,10 @@ export async function executeTool(toolName, args, writerId = 'default', articleR
             text: s.text,
             guideline: s.guideline
           })),
+
+          // AI-Readiness rubric — separate 10-check scorecard (X/10 + A–F grade).
+          // Each check carries its own verdict, the offending text, and a method-based fix.
+          aiReadiness: csabf?.aiReadiness || null,
 
           contentContext: csabf?.contentContext ? {
             detectedType: csabf.contentContext.detectedType,
@@ -915,9 +1407,9 @@ export async function executeTool(toolName, args, writerId = 'default', articleR
           fanoutGapsCount: fanoutGaps.filter(f => !f._covered).length,
 
           semanticKeywords: keywordsData ? {
-            core: (keywordsData.coreTopicKeywords || []).slice(0, 10),
-            lsi: (keywordsData.lsiKeywords || []).slice(0, 10),
-            longTail: (keywordsData.longTailPhrases || []).slice(0, 8)
+            core: dropCompetitorKeywords(keywordsData.coreTopicKeywords).slice(0, 10),
+            lsi: dropCompetitorKeywords(keywordsData.lsiKeywords).slice(0, 10),
+            longTail: dropCompetitorKeywords(keywordsData.longTailPhrases).slice(0, 8)
           } : null,
 
           // ═══ MISSING SECTIONS DETECTION ═══
@@ -952,7 +1444,26 @@ export async function executeTool(toolName, args, writerId = 'default', articleR
             return missing.slice(0, 6);
           })(),
 
-          instruction: 'Present a comprehensive review report with ALL of the following sections. Use clear ## headings for each section so the writer can scan them independently:\n\n(1) ## CSABF SCORE + STRUCTURAL ISSUES\nOverall score, category scores, every failing check with specific fixes.\n\n(2) ## ICP ALIGNMENT\nTotal score, tier, breakdown by 5 categories with hits and specific suggestions to increase each.\n\n(3) ## GEO CITABILITY & AI VISIBILITY\nCheck each section for AI citation readiness — self-contained answer blocks, definition patterns, statistics, question-format headings, extractable lists/tables. Quote exact weak sentences and give rewritten versions.\n\n(4) ## E-E-A-T SIGNALS\nCheck for Experience (case studies, real results), Expertise (technical depth, data-backed claims), Authoritativeness (credentials, CloudFuze track record), Trustworthiness (verifiable facts). Flag what is missing and suggest specific additions.\n\n(5) ## READABILITY\nUse the readability data provided. Report on: average sentence length (target 15-20 words), passive voice rate (target <10%), sentence length variety, complex word percentage (target <15%), transition word usage (target >20%), consecutive same-length sentences. For each metric, show the current value, whether it passes/fails, and a specific fix if failing. Give an overall readability score.\n\n(6) ## GRAMMAR & TONE\nCheck for: passive voice instances (quote specific sentences and rewrite in active voice), marketing/salesy language (quote and rewrite), missing conversational tone (no you/your), filler words, hedging language, generic AI-sounding phrases. Quote exact problem sentences and provide corrected versions.\n\n(7) ## FORMATTING\nCheck: paragraph lengths (max 5 lines each — flag any long paragraphs), heading structure (1 H1, 4-10 H2s), bullet list usage (min 2), numbered list usage (min 1), subheading distribution (max 200 words between subheadings — flag gaps), whitespace/scanability. For each issue, specify the exact location and fix.\n\n(8) ## FAQ GAP ANALYSIS\nShow COVERED questions (good), then MISSING questions ranked by priority. Highlight HIGH PRIORITY ones (appearsInBoth=true). Specify WHERE in the article each missing question should go.\n\n(9) ## SEMANTIC KEYWORDS\nShow target keywords the content should include.\n\n(10) ## SUGGESTED MISSING SECTIONS\nBased on the topic and content analysis, suggest sections that are MISSING from the article but should be added. For each suggested section, explain WHY it should be added and WHERE it should go in the article structure. Common missing sections include: Pricing/Cost Analysis, Use Cases, Security & Compliance, Best Practices, Common Challenges, Key Benefits, Step-by-Step Guide, Comparison Table, How CloudFuze Helps, FAQs, Key Takeaways.\n\nIMPORTANT: Each section must be clearly separated with ## headings. Use checkmarks (pass) and X marks (fail) for quick scanning. Be specific — quote exact content and give actionable fixes for every issue.'
+          instruction: 'Present a comprehensive review report with ALL of the following sections. Use clear ## headings for each section so the writer can scan them independently:\n\n(1) ## CSABF SCORE + STRUCTURAL ISSUES\nOverall score, category scores, every failing check with specific fixes.\n\n(2) ## ICP ALIGNMENT\nTotal score, tier, breakdown by 5 categories with hits and specific suggestions to increase each.\n\n(3) ## GEO CITABILITY & AI VISIBILITY\nCheck each section for AI citation readiness — self-contained answer blocks, definition patterns, statistics, question-format headings, extractable lists/tables. Quote exact weak sentences and give rewritten versions.\n\n(4) ## E-E-A-T SIGNALS\nCheck for Experience (case studies, real results), Expertise (technical depth, data-backed claims), Authoritativeness (credentials, CloudFuze track record), Trustworthiness (verifiable facts). Flag what is missing and suggest specific additions.\n\n(5) ## READABILITY\nUse the readability data provided. Report on: average sentence length (target 15-20 words), passive voice rate (target <10%), sentence length variety, complex word percentage (target <15%), transition word usage (target >20%), consecutive same-length sentences. For each metric, show the current value, whether it passes/fails, and a specific fix if failing. Give an overall readability score.\n\n(6) ## GRAMMAR & TONE\nCheck for: passive voice instances (quote specific sentences and rewrite in active voice), marketing/salesy language (quote and rewrite), missing conversational tone (no you/your), filler words, hedging language, generic AI-sounding phrases. Quote exact problem sentences and provide corrected versions.\n\n(7) ## FORMATTING\nCheck: paragraph lengths (max 5 lines each — flag any long paragraphs), heading structure (1 H1, 4-10 H2s), bullet list usage (min 2), numbered list usage (min 1), subheading distribution (max 200 words between subheadings — flag gaps), whitespace/scanability. For each issue, specify the exact location and fix.\n\n(8) ## FAQ GAP ANALYSIS\nShow COVERED questions (good), then MISSING questions ranked by priority. Highlight HIGH PRIORITY ones (appearsInBoth=true). Specify WHERE in the article each missing question should go.\n\n(9) ## SEMANTIC KEYWORDS\nShow target keywords the content should include.\n\n(10) ## SUGGESTED MISSING SECTIONS\nBased on the topic and content analysis, suggest sections that are MISSING from the article but should be added. For each suggested section, explain WHY it should be added and WHERE it should go in the article structure. Common missing sections include: Pricing/Cost Analysis, Use Cases, Security & Compliance, Best Practices, Common Challenges, Key Benefits, Step-by-Step Guide, Comparison Table, How CloudFuze Helps, FAQs, Key Takeaways.\n\n(11) ## AI-READINESS RUBRIC (10 CHECKS)\nUse the aiReadiness object in the data. Open with the headline: **Overall AI-Readiness: {aiReadiness.score}/10 — Grade {aiReadiness.grade}**, then list aiReadiness.priorityFixes as the top fixes to apply first. Then render a check-by-check table with columns: Check | Verdict | Current | Suggested Fix — covering all 10 checks in order: (1) Title Pattern, (2) Author Byline, (3) Reading Time, (4) Key Takeaways Block, (5) Opening Paragraph, (6) Question-format H2, (7) Numbered Step Subheads, (8) Key Principle / Bottom Line Callouts, (9) Named Product Density, (10) Sentence Discipline. Map each verdict to ✅ PASS / ⚠️ WARNING / ❌ FAIL. For EVERY WARNING or FAIL, quote the exact offending text (from each check\'s current/diagnosis) and give a concrete rewrite — never say "tighten this", show the rewritten version. Special handling: for Check 5, provide a full BEFORE/AFTER opening-paragraph rewrite under 60 words; for Check 8 (highest leverage), draft a "Key principle:" line (8–15 words, "X, not Y" style) for each numbered step or major H2; for Check 10, quote the 3 longest sentences and split each into 2–3 discrete claims. End this section by reminding the writer these are SUGGESTIONS, not blocking gates — they make the final call. Do NOT let any FAIL here block publishing.\n\nIMPORTANT: Each section must be clearly separated with ## headings. Use checkmarks (pass) and X marks (fail) for quick scanning. Be specific — quote exact content and give actionable fixes for every issue.'
+        };
+
+        // Render the finished review (with concrete rewrites) using the internal
+        // model so quality is independent of the user's chat provider. If it fails,
+        // fall back to letting the chat agent compose from reviewData.instruction.
+        let preformattedReview = null;
+        try {
+          const articleText = (csabfMode === 'html' ? htmlToMarkdown(csabfInput) : rawContent).slice(0, 12000);
+          preformattedReview = await renderReviewWithClaude(reviewData, articleText, topicStr);
+        } catch (e) {
+          console.error('[analyze] review render failed:', e.message);
+        }
+
+        return JSON.stringify({
+          ...reviewData,
+          preformatted_review: preformattedReview || null,
+          instruction: preformattedReview
+            ? 'The preformatted_review field is the COMPLETE, finished review report. Output it EXACTLY as-is, verbatim — do NOT summarize, truncate, reformat, re-order, or add any commentary before or after it.'
+            : reviewData.instruction
         });
       } catch (e) {
         return JSON.stringify({ error: 'Content analysis failed: ' + e.message });
@@ -1247,9 +1758,9 @@ Put 5-6 as high, 3-4 as medium. High = questions ChatGPT/Gemini would cite answe
             appearsInBoth: item.sources.length > 1
           })),
           semanticKeywords: keywordsData ? {
-            core: (keywordsData.coreTopicKeywords || []).slice(0, 10),
-            lsi: (keywordsData.lsiKeywords || []).slice(0, 10),
-            longTail: (keywordsData.longTailPhrases || []).slice(0, 8)
+            core: dropCompetitorKeywords(keywordsData.coreTopicKeywords).slice(0, 10),
+            lsi: dropCompetitorKeywords(keywordsData.lsiKeywords).slice(0, 10),
+            longTail: dropCompetitorKeywords(keywordsData.longTailPhrases).slice(0, 8)
           } : null,
           instruction: 'Present ONLY the questions as a numbered list — do NOT generate answers. The content writer will write their own answers. Highlight questions with appearsInBoth=true as HIGH PRIORITY (they appear in both real user questions AND AI search fanout queries). For each question, mention its source (e.g. Google PAA, Reddit, fanout) and priority. Also present the semantic keywords.'
         });
@@ -1828,6 +2339,14 @@ The article should make the reader feel: "This is the definitive resource. Cloud
 
 Both goals reinforce each other: the more authoritative and specific the content, the more AI engines cite it AND the more buyers trust it.
 
+WRITER FEEDBACK RULES — NON-NEGOTIABLE (from real writer thumbs-down feedback):
+1. INTENT FIRST, STRUCTURE SECOND. Before placing any H2, identify the SPECIFIC blog intent — what decision the reader is trying to make or what outcome they're trying to reach. Build H2s around that intent. Do NOT just convert fanout/FAQ queries into H2 headings — fanout queries inform the FAQ section ONLY.
+2. EVERY SECTION MUST BE TIED TO THIS EXACT TOPIC. If the topic is "Slack Enterprise Plan migration," every H2, writing guide, and visual must reference Slack Enterprise specifics (Plan tiers, Workspace API limits, Enterprise Grid org structure) — never generic migration content that could appear in any article.
+3. NO GENERIC STATEMENTS. Every writing guide must reference specific products, features, platforms, protocols, or quantified outcomes. Replace any "tool", "platform", "solution", "benefits" wording with named entities. "Set up the migration" is WEAK — "Configure CloudFuze Migrate with OAuth scopes for the Slack Enterprise Grid API" is STRONG.
+4. CREDIBLE SOURCES FOR EVERY STAT. Every statistic suggested in a section guide MUST name a credible source (Gartner, Forrester, IDC, McKinsey, Statista, Microsoft Learn, Google Workspace docs, or the official platform's documentation). Never suggest unsourced "studies show" claims or invent percentages.
+5. NO COMPETITOR ARTICLES OR IRRELEVANT EXTERNAL LINKS. Never suggest external references or links to competitor migration tools (MultCloud, Mover.io, Movebot, CloudHQ, odrive, Insync, Cloudiway, ShareGate, BitTitan, GS Richcopy, Carbonite, Zapier) or to irrelevant third-party sources. Suggested external references must be official platform documentation only.
+6. ORIGINAL FRAMING — DO NOT COPY PAST ARTICLES. Do not reproduce headings, writing-guide structures, or section orders from existing CloudFuze articles. The framework must be a fresh outline tailored to this specific topic, even if related articles exist.
+
 TOPIC-SPECIFIC FRAMEWORK RULES — CRITICAL:
 - The framework MUST be deeply specific to the exact topic — NOT a generic template.
 - UNDERSTAND THE CLOUDFUZE CONTEXT: Every article exists to position CloudFuze as the expert solution. Analyze how this specific topic relates to CloudFuze's products:
@@ -1965,7 +2484,9 @@ Output ONLY the Markdown framework + keywords section. No preamble, no commentar
 
 Every framework decision — H2 choice, section order, writing guide instructions — must serve both goals. Your H2s are expert-authored, technically authoritative chapter titles that an IT Director would find immediately valuable AND that AI engines would extract as citation-worthy blocks. Each section writing guide tells the writer exactly: what pain point to address, what statistic to include and from where, what entities to name, and how this section moves the buyer toward CloudFuze.
 
-The FAQ/Fanout questions provided are ONLY for the FAQ section at the bottom — never use them as H2 body headings. For 3-6 sections, you MUST add INLINE visual suggestions (📊 Table, 🖼 Image, 🎨 Infographic, 🔀 Diagram, 📈 Stats, 📸 Screenshot) directly under each section writing guide. EVERY Image, Infographic, Diagram, and Screenshot MUST include an alt-text suggestion with the primary keyword. Do NOT put visuals in a separate section.`;
+The FAQ/Fanout questions provided are ONLY for the FAQ section at the bottom — never use them as H2 body headings. For 3-6 sections, you MUST add INLINE visual suggestions (📊 Table, 🖼 Image, 🎨 Infographic, 🔀 Diagram, 📈 Stats, 📸 Screenshot) directly under each section writing guide. EVERY Image, Infographic, Diagram, and Screenshot MUST include an alt-text suggestion with the primary keyword. Do NOT put visuals in a separate section.
+
+You enforce these non-negotiables from writer feedback: intent before structure (never dump fanout queries as H2s); every section deeply specific to THIS exact topic (no generic templates); every statistic names a credible source; no competitor tool names (MultCloud, Mover.io, Cloudiway, ShareGate, BitTitan, etc.) and no irrelevant external links — official platform documentation only; original framing — never copy headings or section structures from past CloudFuze articles.`;
         let frameworkContent = await callClaude(frameworkSystemPrompt, frameworkPrompt, { maxTokens: 6000, temperature: 0.4, timeout: 60000 });
 
         // ═══ PHASE 4: Post-process — clean up, find leftover FAQs, append links ═══
@@ -2161,7 +2682,10 @@ RULES:
 - Do NOT include any preamble, commentary, or notes. Output ONLY the content in Markdown.
 - Do NOT wrap in code blocks.
 - Preserve the meta title and description block if present.
-- Preserve the inline "📋 Sources for this section" blocks under each section. If the edit adds new claims or data, add corresponding inline sources under that section. If rewriting a section, update its source block to match the new content. Never remove existing sources unless explicitly asked.`;
+- Preserve the inline "📋 Sources for this section" blocks under each section. If the edit adds new claims or data, add corresponding inline sources under that section. If rewriting a section, update its source block to match the new content. Never remove existing sources unless explicitly asked.
+- WRITER FEEDBACK — UPDATES MUST BE FRESH: When rewriting, regenerating, or expanding a section, generate genuinely NEW prose. Do not copy or only-lightly-paraphrase the existing section's sentences. The writer asked for an update — produce new wording, new angles, and new examples unless the instruction explicitly says to preserve specific lines.
+- NEVER insert competitor tool names (MultCloud, Mover.io, Movebot, CloudHQ, odrive, Insync, Cloudiway, ShareGate, BitTitan, GS Richcopy, Carbonite, Zapier) when adding or rewriting content. If the user pasted such a name, replace it with CloudFuze positioning.
+- Be SPECIFIC in any new sentences you write: name actual products (CloudFuze Migrate, CloudFuze Manage, AI Chat Agent, Shadow IT Control, Shadow AI Governance), features, platforms (Microsoft 365, Google Workspace, SharePoint, OneDrive), and quantified outcomes. Avoid generic phrases like "our tool", "the platform", "the solution".`;
 
         // Always use Claude for article editing (regardless of user-selected chat model)
         let editedContent = await callClaude(

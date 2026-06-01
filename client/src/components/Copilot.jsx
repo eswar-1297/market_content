@@ -290,7 +290,14 @@ export default function Copilot() {
       // Check for generated content — either from tool result or detect framework/article in chat response
       let contentForEditor = data.generatedArticle || null
 
-      if (!contentForEditor && data.content) {
+      // Only fall back to "looks like an article" detection when the agent did NOT
+      // run a research/review tool. A review response uses many ## section headings
+      // (CSABF, ICP, GEO, AI-Readiness, …) and must NOT be pushed into the editor.
+      const usedArticleTool = (data.toolSteps || []).some(t =>
+        ['generate_article', 'edit_article', 'generate_framework'].includes(t.tool))
+      const usedOtherTool = (data.toolSteps || []).length > 0 && !usedArticleTool
+
+      if (!contentForEditor && data.content && !usedOtherTool) {
         const text = data.content
         const h2Count = (text.match(/^##\s/gm) || []).length
         const hasH1 = /^#\s/m.test(text)
