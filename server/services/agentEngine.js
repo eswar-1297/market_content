@@ -12,11 +12,19 @@ import { crossReferenceMicrosoftTechSearch } from './threadFinder/crossReference
 import { crossReferenceGoogleCommunitySearch } from './threadFinder/crossReferenceGoogleCommunity.js';
 import { getArticles } from './articlesService.js';
 import { checkAIDetection, checkPlagiarism, isCopyleaksConfigured, isPlagiarismConfigured } from './contentCheckService.js';
-import { searchAndFetchContent, listPages, getPageByUrl, isSharePointConfigured } from './sharepointService.js';
+import { searchAndFetchContent, getPageByUrl, isCftoolsDocsConfigured } from './cftoolsDocsService.js';
 import { getWriterBio, formatWriterBioForPrompt } from '../config/writerBios.js';
 import { formatBlogPatternsForPrompt, formatWriterPatternsForPrompt } from '../config/blogPatterns.js';
 import { htmlToMarkdown, extractHeadings, extractParagraphs, stripHtml } from '../utils/contentParser.js';
-import { ICP_FRAMEWORK } from '../utils/copilotPrompts.js';
+import { ICP_FRAMEWORK, COMPARISON_ARTICLE_BRIEF, COMPARISON_REVIEW_CHECKLIST } from '../utils/copilotPrompts.js';
+
+// Detect a "[A] vs [B]" platform comparison article from its content type and topic/text.
+// Drives injection of the B2B comparison brief into generation, framework, and review.
+function isComparisonArticle(contentType, ...texts) {
+  if ((contentType || '').toString().toLowerCase() === 'comparison') return true;
+  const hay = texts.filter(Boolean).join(' ').toLowerCase();
+  return /\bvs\.?\b|\bversus\b/.test(hay);
+}
 import { startTrace, flushLangfuse } from './langfuseService.js';
 import { getLearnedRulesPrompt, addLearnedRule } from './feedbackLearningService.js';
 
@@ -103,6 +111,16 @@ Hard rules:
 - The AI-Readiness rubric is advisory (suggestions, not blocking gates).
 - NEVER name competitor tools (MultCloud, Cloudiway, Mover.io, Movebot, ShareGate, BitTitan, etc.).
 - Output ONLY the Markdown report — no preamble like "here is your review".`;
+
+  // When the article is an "[A] vs [B]" comparison, the review must ALSO audit it
+  // against the B2B comparison standard.
+  const isComparison = isComparisonArticle(
+    reviewData.contentContext?.isComparison ? 'comparison' : null,
+    topic, reviewData.title, reviewData.h1
+  );
+  const comparisonReviewSection = isComparison
+    ? `\n\nADDITIONAL SECTION — this article is an "[A] vs [B]" comparison, so APPEND a "## Comparison Standard Compliance" section to the report. ${COMPARISON_REVIEW_CHECKLIST}`
+    : '';
 
   const data = {
     overallScore: reviewData.overallScore,
@@ -201,6 +219,7 @@ Per-check requirements (only apply when verdict is WARNING or FAIL):
 - **10. Sentence Discipline** → Quote the 3 LONGEST sentences from the article (verbatim, in quotes) and show each split into 2–3 discrete claim sentences under a "**Rewrite:**" line.
 
 End the section with: "These are suggestions, not blocking gates — the writer makes the final call."
+${comparisonReviewSection}
 
 Topic: "${topic}".`;
 
@@ -793,13 +812,13 @@ export const AGENT_TOOLS_OPENAI = [
   ,{
     type: 'function',
     function: {
-      name: 'search_sharepoint_docs',
-      description: "Search CloudFuze's internal SharePoint documentation site (DOC360) for product information, golden image combinations, migration guides, feature specs, and technical docs. Use this when the writer needs accurate CloudFuze product details, supported migration paths, feature specifics, or any internal documentation to include in their article. Returns page titles, content snippets, and full page content for the best match. Also use this when the writer pastes a SharePoint URL — fetch that specific page's content.",
+      name: 'search_internal_docs',
+      description: "Search CloudFuze's internal Migration Docs knowledge base (doc.cftools.live) for accurate product data. It covers FOUR kinds of source: (1) supported migration COMBINATIONS per product line (Message, Mail, Content) — which source→destination paths are supported at all; (2) COMPATIBILITY matrices — feature-by-feature Yes/NO support for each migration path; (3) CLOUD-INFO docs — UI walkthroughs and how-to guides; (4) DOCUMENTS — RCA and technical docs. Each result is tagged with a contentType so you can classify the question and read the right source. Use this for ANY question about whether CloudFuze supports a platform/path/feature, supported combinations, feature specifics, migration steps, or product capabilities. Returns titles, snippets, and full content for the best matches. Also use it when the writer pastes a doc.cftools.live URL — fetch that page's content.",
       parameters: {
         type: 'object',
         properties: {
-          query: { type: 'string', description: 'Search query — topic, feature name, migration path, or keyword to find in SharePoint docs (e.g. "golden image combinations", "OneDrive to Google Drive", "permission mapping", "supported platforms")' },
-          sharepoint_url: { type: 'string', description: 'Optional: a specific SharePoint page URL to fetch directly instead of searching' }
+          query: { type: 'string', description: 'Search query — topic, feature name, migration path, or keyword to find in Migration Docs (e.g. "golden image combinations", "OneDrive to Google Drive", "permission mapping", "supported platforms")' },
+          doc_url: { type: 'string', description: 'Optional: a specific doc.cftools.live page URL to fetch directly instead of searching' }
         },
         required: ['query']
       }
@@ -1551,7 +1570,7 @@ export async function executeTool(toolName, args, writerId = 'default', articleR
       if (chunks.length === 0) return JSON.stringify({ found: 0, message: 'No matching content sections found.' });
       return JSON.stringify({
         found: chunks.length,
-        warning: 'These chunks are from PAST PUBLISHED articles. Use them ONLY for reference (understanding what was already written, internal linking, avoiding duplication). Do NOT copy, paraphrase, or reuse this content in new articles. All new content must be 100% AI-original. Use SharePoint docs for factual product data.',
+        warning: 'These chunks are from PAST PUBLISHED articles. Use them ONLY for reference (understanding what was already written, internal linking, avoiding duplication). Do NOT copy, paraphrase, or reuse this content in new articles. All new content must be 100% AI-original. Use Migration Docs for factual product data.',
         chunks: chunks.map(c => ({
           articleTitle: c.article_title,
           sectionType: c.section_type,
@@ -2086,18 +2105,18 @@ Put 5-6 as high, 3-4 as medium. High = questions ChatGPT/Gemini would cite answe
       }
     }
 
-    case 'search_sharepoint_docs': {
-      if (!isSharePointConfigured()) {
-        return JSON.stringify({ error: 'SharePoint not configured. Add MS_TENANT_ID, MS_CLIENT_ID, and MS_CLIENT_SECRET to server .env file. See setup instructions in CLAUDE.md.' });
+    case 'search_internal_docs': {
+      if (!isCftoolsDocsConfigured()) {
+        return JSON.stringify({ error: 'Migration Docs not configured. Set CFTOOLS_DOCS_URL in the server .env file (defaults to https://doc.cftools.live).' });
       }
 
       const query = (args.query || '').toString().trim();
-      const spUrl = (args.sharepoint_url || '').toString().trim();
+      const docUrlArg = (args.doc_url || '').toString().trim();
 
       try {
-        // If a specific SharePoint URL was provided, fetch that page directly
-        if (spUrl && spUrl.includes('sharepoint.com')) {
-          const page = await getPageByUrl(spUrl);
+        // If a specific Migration Docs URL was provided, fetch that page directly
+        if (docUrlArg && docUrlArg.includes('cftools.live')) {
+          const page = await getPageByUrl(docUrlArg);
           return JSON.stringify({
             success: true,
             mode: 'direct',
@@ -2107,12 +2126,12 @@ Put 5-6 as high, 3-4 as medium. High = questions ChatGPT/Gemini would cite answe
               content: page.content.substring(0, 6000),
               lastModified: page.lastModified
             },
-            instruction: 'Present the SharePoint page content clearly. The writer can use this information in their article. Summarize the key points and suggest how to incorporate them into the article naturally.'
+            instruction: 'Present the Migration Docs page content clearly. The writer can use this information in their article. Summarize the key points and suggest how to incorporate them into the article naturally.'
           });
         }
 
-        // Otherwise, search SharePoint for matching content
-        if (!query) return JSON.stringify({ error: 'Query is required to search SharePoint docs.' });
+        // Otherwise, search Migration Docs for matching content
+        if (!query) return JSON.stringify({ error: 'Query is required to search Migration Docs.' });
 
         const result = await searchAndFetchContent(query);
 
@@ -2120,7 +2139,7 @@ Put 5-6 as high, 3-4 as medium. High = questions ChatGPT/Gemini would cite answe
           return JSON.stringify({
             success: false,
             query,
-            message: `No SharePoint pages found matching "${query}". Try different keywords or check the page exists in the DOC360 site.`
+            message: `No Migration Docs pages found matching "${query}". Try different keywords or check the page exists on doc.cftools.live.`
           });
         }
 
@@ -2132,10 +2151,10 @@ Put 5-6 as high, 3-4 as medium. High = questions ChatGPT/Gemini would cite answe
           topResult: result.topResult,
           additionalResults: result.additionalResults || [],
           otherResults: result.otherResults,
-          instruction: 'IMPORTANT: You MUST summarize the actual CONTENT from the documents — do NOT just list file names and links. Read through topResult.content and additionalResults[].content, extract the key information relevant to the query, and present it as a clear, organized summary. After the summary, cite each source with its name and SharePoint link. Format: "Source: [Document Name](webUrl)". If a document content is null or empty, mention that the file exists but could not be read and provide the link for manual access.'
+          instruction: 'You MUST answer ONLY from the actual CONTENT returned — never guess. Each result has a "contentType"; CLASSIFY the question and read the matching source(s):\n\n• contentType "compatibility" → THE SOURCE OF TRUTH for what is supported. It is a matrix formatted "Feature | <Path 1> | <Path 2> | ..." where each column is a supported source→destination PATH and each cell is Yes/NO for that feature on that path. The set of COLUMNS is the authoritative list of supported paths; the CELLS are the authoritative feature support. For "can we migrate <feature> from A to B" or "is <feature> supported", find the exact ROW (feature) and exact COLUMN (the A→B path) and report THAT cell. For "is A→B supported at all", check whether an A→B column exists in any matrix.\n• contentType "combinations" → only a HIGH-LEVEL SUMMARY list per product line (Message/Mail/Content). It is NOT exhaustive. Use it for orientation, but NEVER conclude something is unsupported merely because it is absent here — the matrices list more paths than this summary.\n• contentType "cloud-info" / "documents" → narrative how-to / UI steps / RCA / troubleshooting. Use for "how do I / what are the steps / why did X happen" — NOT as the authority for support.\n\nRULES: (1) Answer support/feature questions from the compatibility matrix cell/column and state it plainly: "Yes, supported", "No — NOT supported for this path" (only when the matrix cell is NO or no such path/column exists anywhere), or the exact value. (2) The matrix overrides the combinations summary and any narrative doc when they disagree. (3) Only say "not supported" when you have POSITIVE evidence (a NO cell, or the path/platform appears in NO matrix column and NO combinations entry). If the returned content does not cover the asked path+feature at all, say you could not find it in Migration Docs and suggest the writer check the site — do NOT guess. (4) Cite each source used as "Source: [Name](webUrl)". (5) If content is null/empty, say the page exists but could not be read and give the link.'
         });
       } catch (e) {
-        return JSON.stringify({ error: `SharePoint search failed: ${e.message}` });
+        return JSON.stringify({ error: `Migration Docs search failed: ${e.message}` });
       }
     }
 
@@ -2195,8 +2214,8 @@ Put 5-6 as high, 3-4 as medium. High = questions ChatGPT/Gemini would cite answe
             : generateFanoutQueries(topicStr, '', 12, _ip.type).catch(() => null),
           // Published articles for internal linking
           getArticles({}).catch(() => []),
-          // SharePoint product data
-          isSharePointConfigured()
+          // Migration Docs product data
+          isCftoolsDocsConfigured()
             ? searchAndFetchContent(topicStr).catch(() => null)
             : Promise.resolve(null),
           // External references from credible sites
@@ -2217,7 +2236,7 @@ Put 5-6 as high, 3-4 as medium. High = questions ChatGPT/Gemini would cite answe
         const allPublished = articlesResult.status === 'fulfilled' ? articlesResult.value : [];
         const spData = spResult.status === 'fulfilled' ? spResult.value : null;
 
-        // Build SharePoint context
+        // Build Migration Docs context
         let spContext = '';
         if (spData?.found) {
           const allSpResults = [spData.topResult, ...(spData.additionalResults || [])].filter(Boolean);
@@ -2225,7 +2244,7 @@ Put 5-6 as high, 3-4 as medium. High = questions ChatGPT/Gemini would cite answe
             .filter(r => r.content && r.content.length > 50)
             .map(r => 'Source "' + r.name + '": ' + r.content.substring(0, 2000));
           if (spParts.length > 0) {
-            spContext = '\n\nCLOUDFUZE PRODUCT DATA (from internal SharePoint docs — use this to create accurate section headings):\n' + spParts.join('\n\n').substring(0, 4000);
+            spContext = '\n\nCLOUDFUZE PRODUCT DATA (from internal Migration Docs — use this to create accurate section headings):\n' + spParts.join('\n\n').substring(0, 4000);
           }
         }
 
@@ -2373,7 +2392,7 @@ IMPORTANT: The topic below is just a topic name — NOT an H1 title. You MUST cr
 
 TOPIC: "${topicStr}"
 CONTENT TYPE: ${contentType}
-${additionalContext ? `ADDITIONAL CONTEXT: ${additionalContext}` : ''}${spContext}${faqFanoutContext}${fanoutStructureHint}
+${isComparisonArticle(contentType, topicStr, additionalContext) ? `\n${COMPARISON_ARTICLE_BRIEF}\n\nPRECEDENCE: This is a comparison article. The B2B comparison structure ABOVE overrides the generic CSABF section order below — produce ALL of its sections (Intro Summary Block, Key Takeaways table, At-a-Glance table, the six question-format comparison H2s, Pros and Cons for BOTH products, the Migrating section, FAQ, and Final Verdict). Still keep the "How CloudFuze Helps" angle inside the Migrating section.\n` : ''}${additionalContext ? `ADDITIONAL CONTEXT: ${additionalContext}` : ''}${spContext}${faqFanoutContext}${fanoutStructureHint}
 ${blogPatternsText}
 ${writerBioText ? `\n${writerBioText}` : ''}
 ${writerPatternsText ? `\n${writerPatternsText}\n\nCRITICAL: The framework MUST follow this writer's preferred article structure, H2 heading style, tone, and target audience. Match their actual published patterns.` : ''}
@@ -2748,11 +2767,11 @@ RULES:
         const writerProfile = getWriterProfile(writerId);
         const pastArticles = findRelatedArticles(writerId, topicStr);
 
-        // ═══ AUTO-FETCH SHAREPOINT PRODUCT DATA ═══
+        // ═══ AUTO-FETCH MIGRATION DOCS PRODUCT DATA ═══
         // Every CloudFuze article benefits from real product data.
-        // Search SharePoint using topic + keywords + framework headings for maximum coverage.
+        // Search Migration Docs using topic + keywords + framework headings for maximum coverage.
         let sharepointContext = '';
-        if (isSharePointConfigured()) {
+        if (isCftoolsDocsConfigured()) {
           try {
             // Build multiple search queries from topic, primary keyword, and framework headings
             const reqs0 = articleRequirements || {};
@@ -2760,7 +2779,7 @@ RULES:
             if (args.primary_keyword || reqs0.primaryKeyword) {
               searchQueries.push(args.primary_keyword || reqs0.primaryKeyword);
             }
-            // Extract key headings from framework for targeted SharePoint searches
+            // Extract key headings from framework for targeted Migration Docs searches
             const fw = args.framework?.length ? args.framework : (reqs0.framework || []);
             for (const section of fw) {
               if (section.heading && section.level <= 2) {
@@ -2771,7 +2790,7 @@ RULES:
               }
             }
 
-            // Search SharePoint with all queries in parallel, deduplicate results
+            // Search Migration Docs with all queries in parallel, deduplicate results
             const spParts = [];
             const seenUrls = new Set();
             const spResults = await Promise.allSettled(
@@ -2790,10 +2809,10 @@ RULES:
             }
             if (spParts.length > 0) {
               sharepointContext = spParts.join('\n\n').substring(0, 10000);
-              console.log(`📄 [SharePoint] Found ${spParts.length} relevant docs from ${searchQueries.length} queries`);
+              console.log(`📄 [Migration Docs] Found ${spParts.length} relevant docs from ${searchQueries.length} queries`);
             }
           } catch (e) {
-            console.warn('SharePoint auto-fetch for article generation failed:', e.message);
+            console.warn('Migration Docs auto-fetch for article generation failed:', e.message);
           }
         }
 
@@ -2903,7 +2922,7 @@ RULES:
           fullContent: articleContent,
           inlineSources: sourceBlocks,
           sharepointSources,
-          instruction: 'Present the meta title and meta description FIRST at the top, clearly labeled. Then present the FULL article content exactly as generated — do NOT summarize or truncate. The article has inline "📋 Sources for this section" blocks under each section — these MUST be included in full so the writer can verify claims. After presenting the article, remind the writer: "📋 **Before publishing, verify all inline sources under each section.** Links marked with 🔗 *Internal SharePoint* let you confirm CloudFuze product details. Links marked ⚠️ need the writer to find the exact URL. Remove the source blocks before final publishing." Then offer to make specific changes, adjust meta tags, add more FAQs, or run a CSABF analysis on it.'
+          instruction: 'Present the meta title and meta description FIRST at the top, clearly labeled. Then present the FULL article content exactly as generated — do NOT summarize or truncate. The article has inline "📋 Sources for this section" blocks under each section — these MUST be included in full so the writer can verify claims. After presenting the article, remind the writer: "📋 **Before publishing, verify all inline sources under each section.** Links marked with 🔗 *Internal Migration Docs* let you confirm CloudFuze product details. Links marked ⚠️ need the writer to find the exact URL. Remove the source blocks before final publishing." Then offer to make specific changes, adjust meta tags, add more FAQs, or run a CSABF analysis on it.'
         });
       } catch (e) {
         return JSON.stringify({ error: `Article generation failed: ${e.message}` });
@@ -3249,7 +3268,7 @@ CONTENT ORIGINALITY — CRITICAL:
 - Every article MUST be 100% AI-original writing. Do NOT copy, paraphrase, rephrase, or reuse text from any past CloudFuze blog articles.
 - Past articles listed in the prompt are ONLY for: (1) knowing what topics are already covered so you AVOID repeating them, and (2) suggesting internal links to those articles where relevant.
 - Do NOT use past article content as source material. Do NOT reproduce sentences, paragraphs, or section structures from past blogs.
-- The ONLY factual source for CloudFuze product data is the SharePoint documentation provided in the prompt. If no SharePoint data is provided, write based on general knowledge about cloud migration — do NOT invent specific CloudFuze features.
+- The ONLY factual source for CloudFuze product data is the Migration Docs documentation provided in the prompt. If no Migration Docs data is provided, write based on general knowledge about cloud migration — do NOT invent specific CloudFuze features.
 - For statistics, data points, and industry facts — use publicly available research (Gartner, Forrester, IDC, Microsoft docs, Google docs) and cite them inline.
 - Each article must bring a FRESH perspective, new angles, and original analysis — even if the topic overlaps with past articles.
 
@@ -3415,7 +3434,7 @@ According to Gartner, 85% of enterprises will adopt a cloud-first strategy by 20
 > **📋 Sources for this section:**
 > - [Gartner: Cloud-First Strategy Report 2025](https://www.gartner.com/...) — statistic on enterprise cloud adoption
 > - [Microsoft: SharePoint Migration Overview](https://learn.microsoft.com/en-us/sharepointonline/migrate-to-sharepoint-online) — official migration documentation
-> - [CloudFuze SharePoint: Supported Migration Paths](sharepoint-url-here) — 🔗 *Internal SharePoint — verify product details*
+> - [CloudFuze Migration Docs: Supported Migration Paths](https://doc.cftools.live/) — 🔗 *Internal Migration Docs — verify product details*
 
 RULES FOR INLINE SOURCES:
 1. Place a "> **📋 Sources for this section:**" block at the BOTTOM of every H2 section that contains facts, statistics, product claims, or technical details
@@ -3424,10 +3443,10 @@ RULES FOR INLINE SOURCES:
 4. Sections that MUST have sources:
    - Any section with a statistic or data point (e.g., "85% of enterprises...")
    - Any section referencing compliance standards (link to SOC 2, HIPAA, GDPR, FedRAMP official pages)
-   - Any section with CloudFuze product claims (link to the SharePoint source URL if provided in the prompt)
+   - Any section with CloudFuze product claims (link to the Migration Docs source URL if provided in the prompt)
    - Any section referencing Microsoft/Google/platform documentation
    - Any section citing research (Gartner, Forrester, IDC, McKinsey, Statista)
-5. SharePoint sources: If CloudFuze internal SharePoint data was provided in the prompt, cite it with its exact URL and mark it: 🔗 *Internal SharePoint — verify product details*
+5. Migration Docs sources: If CloudFuze internal Migration Docs data was provided in the prompt, cite it with its exact URL and mark it: 🔗 *Internal Migration Docs — verify product details*
 6. ONLY include real, verifiable URLs. Do NOT hallucinate URLs.
 7. If you cite a stat but are unsure of the exact URL, write: "[Source Name] — *⚠️ verify link before publishing*"
 8. Aim for 2-4 sources per section that has factual claims
@@ -3458,6 +3477,11 @@ Both goals reinforce each other: authoritative, specific content is both more ci
   parts.push(`TOPIC: "${params.topic}" — This is just the topic name, NOT the H1. You must create a Core ICP-targeted H1 (targeting CIOs/IT Directors at 500+ employee companies, US-based, using M365/GWS). Include enterprise scale language, buyer persona signal, and platform names. Do NOT use this raw topic as the H1.`);
   parts.push(`CONTENT TYPE: ${params.contentType}`);
   parts.push(`TARGET WORD COUNT: ${params.wordCount} words`);
+
+  // Comparison articles ("[A] vs [B]") must follow the B2B comparison standard.
+  if (isComparisonArticle(params.contentType, params.topic, params.primaryKeyword)) {
+    parts.push(COMPARISON_ARTICLE_BRIEF + `\n\nPRECEDENCE: This is a comparison article. The B2B comparison structure ABOVE overrides the generic article structure — produce ALL of its sections in order (Intro Summary Block, Key Takeaways table, At-a-Glance table, the six question-format comparison H2s, Pros and Cons for BOTH products, the "What to Consider When Migrating" section, FAQ, and Final Verdict). Fold "How CloudFuze Helps" into the Migrating section — do NOT add it as a separate generic section.`);
+  }
 
   if (params.primaryKeyword) {
     parts.push(`PRIMARY KEYWORD: "${params.primaryKeyword}" — use this 8-12 times naturally`);
@@ -3527,7 +3551,7 @@ You are writing AS ${params.writerName}. The article MUST sound like ${params.wr
   }
 
   if (params.sharepointContext) {
-    parts.push(`CLOUDFUZE INTERNAL PRODUCT DATA (from SharePoint — USE THIS for accurate product information):\nThe following is real data from CloudFuze's internal documentation. Use these facts, features, supported combinations, and specifications in the article. Do NOT make up product details — use ONLY what is provided here. If the data includes supported migration paths, feature lists, or platform combinations, weave them naturally into the article.\n\n${params.sharepointContext}\n\nIMPORTANT: Cite specific features, supported platforms, and capabilities from the data above. This makes the article factually accurate and authoritative.\n\nSHAREPOINT SOURCE LINKING: Each SharePoint source above has a "Source:" line with a name and URL. You MUST include these SharePoint sources in the inline "📋 Sources for this section" block under EVERY section that uses SharePoint data. Format: "> - [SharePoint Doc Title](URL) — 🔗 *Internal SharePoint — verify product details*". Writers need these links directly under the relevant paragraph to verify product claims before publishing.`);
+    parts.push(`CLOUDFUZE INTERNAL PRODUCT DATA (from Migration Docs — USE THIS for accurate product information):\nThe following is real data from CloudFuze's internal documentation. Use these facts, features, supported combinations, and specifications in the article. Do NOT make up product details — use ONLY what is provided here. If the data includes supported migration paths, feature lists, or platform combinations, weave them naturally into the article.\n\n${params.sharepointContext}\n\nIMPORTANT: Cite specific features, supported platforms, and capabilities from the data above. This makes the article factually accurate and authoritative.\n\nMIGRATION DOCS SOURCE LINKING: Each Migration Docs source above has a "Source:" line with a name and URL. You MUST include these Migration Docs sources in the inline "📋 Sources for this section" block under EVERY section that uses Migration Docs data. Format: "> - [Migration Docs Title](URL) — 🔗 *Internal Migration Docs — verify product details*". Writers need these links directly under the relevant paragraph to verify product claims before publishing.`);
   }
 
   parts.push(`\nNow write the complete article. Output ONLY the article in Markdown format. No preamble, no notes, no commentary.`);

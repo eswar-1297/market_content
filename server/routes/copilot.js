@@ -35,7 +35,7 @@ const TOOL_LABELS = {
   edit_article: 'Editing article...',
   check_ai_detection: 'Running AI content detection...',
   check_plagiarism: 'Running plagiarism check...',
-  search_sharepoint_docs: 'Searching SharePoint docs...',
+  search_internal_docs: 'Searching Migration Docs...',
   update_article_requirements: 'Saving article requirements...'
 };
 
@@ -353,7 +353,7 @@ function summarizeToolResult(tool, result) {
     case 'check_plagiarism':
       if (result.error) return result.error;
       return `Plagiarism: ${result.plagiarismScore}% · ${result.totalMatched}/${result.totalChecked} sentences matched · ${result.verdict}`;
-    case 'search_sharepoint_docs':
+    case 'search_internal_docs':
       if (result.error) return result.error;
       if (result.mode === 'direct') return `Fetched: "${result.page?.title}"`;
       if (result.topResult) {

@@ -25,13 +25,13 @@ const TOOL_ICONS = {
   edit_article: PenLine,
   check_ai_detection: ClipboardCheck,
   check_plagiarism: Search,
-  search_sharepoint_docs: BookOpen,
+  search_internal_docs: BookOpen,
   update_article_requirements: ListChecks
 }
 
 export default function ChatPanel({ messages, onSendMessage, loading, onSetWriter, onSetTopic, sessionId }) {
   const [input, setInput] = useState('')
-  const [sharepointMode, setSharepointMode] = useState(false)
+  const [docsMode, setDocsMode] = useState(false)
   const [attachments, setAttachments] = useState([])
   const [attachLoading, setAttachLoading] = useState(false)
   const [attachMenuOpen, setAttachMenuOpen] = useState(false)
@@ -106,10 +106,10 @@ export default function ChatPanel({ messages, onSendMessage, loading, onSetWrite
     }
     const sendable = attachments.filter(a => a.kind !== 'skipped')
     const effectiveText = text || (hasAttachments ? 'Please review the attached file(s) and respond accordingly.' : '')
-    if (sharepointMode) {
-      const spPrompt = `[SHAREPOINT LOOKUP] Search the internal SharePoint DOC360 site for: ${effectiveText}. Use the search_sharepoint_docs tool to find this information. Do NOT guess — only return data found in SharePoint.`
-      onSendMessage(spPrompt, `SharePoint: ${effectiveText}`, sendable)
-      setSharepointMode(false)
+    if (docsMode) {
+      const spPrompt = `[DOCS LOOKUP] Search the internal CloudFuze Migration Docs (doc.cftools.live) for: ${effectiveText}. Use the search_internal_docs tool to find this information. Do NOT guess — only return data found in Migration Docs.`
+      onSendMessage(spPrompt, `Migration Docs: ${effectiveText}`, sendable)
+      setDocsMode(false)
     } else {
       onSendMessage(effectiveText, undefined, sendable)
     }
@@ -194,12 +194,12 @@ export default function ChatPanel({ messages, onSendMessage, loading, onSetWrite
         />
 
         <div className="space-y-1.5">
-          {sharepointMode && (
+          {docsMode && (
             <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 text-xs text-blue-700 dark:text-blue-300">
               <Building2 className="w-3 h-3" />
-              <span className="font-medium">SharePoint mode</span>
+              <span className="font-medium">Migration Docs mode</span>
               <span className="text-blue-500 dark:text-blue-400">— your question will search internal docs</span>
-              <button onClick={() => setSharepointMode(false)} className="ml-auto text-blue-400 hover:text-blue-600 dark:hover:text-blue-300 font-bold">&times;</button>
+              <button onClick={() => setDocsMode(false)} className="ml-auto text-blue-400 hover:text-blue-600 dark:hover:text-blue-300 font-bold">&times;</button>
             </div>
           )}
 
@@ -212,7 +212,7 @@ export default function ChatPanel({ messages, onSendMessage, loading, onSetWrite
             </div>
           )}
 
-          <div className={`flex items-end gap-2 bg-gray-50 dark:bg-gray-800 rounded-xl px-3 py-2 border ${sharepointMode ? 'border-blue-300 dark:border-blue-700 ring-1 ring-blue-200 dark:ring-blue-800' : 'border-gray-200 dark:border-gray-700'} focus-within:ring-2 focus-within:ring-indigo-500 focus-within:border-transparent`}>
+          <div className={`flex items-end gap-2 bg-gray-50 dark:bg-gray-800 rounded-xl px-3 py-2 border ${docsMode ? 'border-blue-300 dark:border-blue-700 ring-1 ring-blue-200 dark:ring-blue-800' : 'border-gray-200 dark:border-gray-700'} focus-within:ring-2 focus-within:ring-indigo-500 focus-within:border-transparent`}>
             {/* Attach button with popover menu */}
             <div className="relative flex-shrink-0" ref={attachMenuRef}>
               <button
@@ -244,10 +244,10 @@ export default function ChatPanel({ messages, onSendMessage, loading, onSetWrite
             </div>
 
             <button
-              onClick={() => setSharepointMode(!sharepointMode)}
-              title={sharepointMode ? 'Disable SharePoint mode' : 'Ask from SharePoint docs'}
+              onClick={() => setDocsMode(!docsMode)}
+              title={docsMode ? 'Disable Migration Docs mode' : 'Ask from Migration Docs'}
               className={`flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${
-                sharepointMode
+                docsMode
                   ? 'bg-blue-600 text-white hover:bg-blue-700'
                   : 'bg-gray-200 dark:bg-gray-700 text-gray-500 dark:text-gray-400 hover:bg-blue-100 dark:hover:bg-blue-900/30 hover:text-blue-600 dark:hover:text-blue-400'
               }`}
@@ -259,7 +259,7 @@ export default function ChatPanel({ messages, onSendMessage, loading, onSetWrite
               value={input}
               onChange={e => { setInput(e.target.value); autoResize() }}
               onKeyDown={handleKeyDown}
-              placeholder={sharepointMode ? "Ask about CloudFuze features, golden combos, migration paths..." : "Type your topic or ask anything..."}
+              placeholder={docsMode ? "Ask about CloudFuze features, golden combos, migration paths..." : "Type your topic or ask anything..."}
               rows={1}
               className="flex-1 bg-transparent text-sm text-gray-900 dark:text-gray-100 placeholder-gray-400 resize-none focus:outline-none overflow-hidden"
               style={{ minHeight: '24px', maxHeight: '200px', overflowY: 'auto' }}

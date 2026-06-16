@@ -217,7 +217,7 @@ Full profiles: `server/config/writerBios.js` and `server/config/blogPatterns.js`
 | `search_g2_testimonials` | G2 review search |
 | `check_ai_detection` | Copyleaks AI score |
 | `check_plagiarism` | Plagiarism check |
-| `search_sharepoint_docs` | Internal SharePoint/DOC360 search |
+| `search_internal_docs` | Internal Migration Docs (doc.cftools.live) search |
 | `update_article_requirements` | Save keywords/FAQs/framework state |
 
 ### Review Sections (analyze_content_structure)
