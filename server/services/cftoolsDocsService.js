@@ -71,10 +71,23 @@ function htmlToText(html) {
     .trim();
 }
 
-// Public URL for a doc. The SPA has no per-doc deep route, so this links to the
-// site home; the doc name is cited alongside it for the writer to locate it.
-function docUrl(_slug) {
-  return `${BASE_URL}/`;
+// Build a deep link to the exact page in the Migration Docs SPA. The app is a
+// single-page React app that selects content from query params:
+//   compatibility matrix -> ?view=compatibility&matrix=<slug>
+//   cloud-info doc        -> ?view=cloudinfo&info=<slug>
+//   document              -> ?view=documents&doc=<slug>
+//   product combinations  -> ?product=<Product name>
+function docUrl(source, slug) {
+  const base = `${BASE_URL}/`;
+  if (!slug) return base;
+  const s = encodeURIComponent(slug);
+  switch (source) {
+    case 'compatibility': return `${base}?view=compatibility&matrix=${s}`;
+    case 'cloud-info':    return `${base}?view=cloudinfo&info=${s}`;
+    case 'documents':     return `${base}?view=documents&doc=${s}`;
+    case 'combinations':  return `${base}?product=${s}`; // slug holds the product name
+    default:              return base;
+  }
 }
 
 // ═══ SCORING ═══
@@ -152,7 +165,7 @@ async function loadCombinations() {
     if (!Array.isArray(combos) || combos.length === 0) continue;
     items.push({
       name: `${product} — Supported Migration Combinations`,
-      slug: '',
+      slug: product, // used to deep-link to ?product=<product>
       source: 'combinations',
       text:
         `High-level list of ${product} migration combinations (source → destination) highlighted in CloudFuze Migration Docs:\n` +
@@ -283,7 +296,7 @@ export async function searchAndFetchContent(query) {
   const MAX_CONTENT = 5000;
   const toResult = (it) => ({
     name: it.name,
-    webUrl: docUrl(it.slug),
+    webUrl: docUrl(it.source, it.slug),
     snippet: (it.text || '').substring(0, 280),
     lastModified: null,
     content: (it.text || '').substring(0, MAX_CONTENT) || null,
@@ -298,7 +311,7 @@ export async function searchAndFetchContent(query) {
     additionalResults: all.slice(1, 5).map(toResult),
     otherResults: all.slice(5, 10).map(it => ({
       name: it.name,
-      webUrl: docUrl(it.slug),
+      webUrl: docUrl(it.source, it.slug),
       snippet: (it.text || '').substring(0, 200),
       lastModified: null
     }))
@@ -306,14 +319,35 @@ export async function searchAndFetchContent(query) {
 }
 
 /**
- * Fetch a specific Migration Docs page by its doc.cftools.live URL.
- * Matches the slug (or trailing path segment) against documents, cloud-info,
- * and compatibility matrices.
+ * Fetch a specific Migration Docs page by its doc.cftools.live URL. Handles both
+ * deep links with query params (?view=compatibility&matrix=<slug>, ?view=cloudinfo
+ * &info=<slug>, ?view=documents&doc=<slug>) and bare slugs in the path.
  */
 export async function getPageByUrl(url) {
+  // Prefer an explicit slug from the deep-link query params.
+  let qpSlug = '';
+  let qpMatrix = false;
+  try {
+    const u = new URL(url);
+    qpMatrix = !!u.searchParams.get('matrix');
+    qpSlug = (u.searchParams.get('matrix') ||
+              u.searchParams.get('info') ||
+              u.searchParams.get('doc') || '').trim();
+  } catch { /* not an absolute URL — fall back to path parsing */ }
+
   const clean = (url || '').split('?')[0].split('#')[0].replace(/\/+$/, '');
-  const slug = decodeURIComponent(clean.split('/').pop() || '').toLowerCase();
+  const slug = (qpSlug || decodeURIComponent(clean.split('/').pop() || '')).toLowerCase();
   if (!slug) throw new Error(`Could not parse a doc slug from: ${url}`);
+
+  // If the link explicitly points at a matrix, resolve it directly.
+  if (qpMatrix) {
+    try {
+      const detail = await fetchJson(`/api/compatibility/${encodeURIComponent(slug)}`);
+      if (detail?.matrix) {
+        return { title: detail.matrix.name, webUrl: docUrl('compatibility', slug), content: renderMatrix(detail.matrix), lastModified: null };
+      }
+    } catch { /* fall through to general matching */ }
+  }
 
   const docItems = await loadDocItems();
   const match = docItems.find(it =>
@@ -322,14 +356,14 @@ export async function getPageByUrl(url) {
     (it.name || '').toLowerCase().includes(slug.replace(/-/g, ' '))
   );
   if (match) {
-    return { title: match.name, webUrl: docUrl(match.slug), content: match.text, lastModified: null };
+    return { title: match.name, webUrl: docUrl(match.source, match.slug), content: match.text, lastModified: null };
   }
 
   // Try compatibility matrices by slug.
   try {
     const detail = await fetchJson(`/api/compatibility/${encodeURIComponent(slug)}`);
     if (detail?.matrix) {
-      return { title: detail.matrix.name, webUrl: docUrl(slug), content: renderMatrix(detail.matrix), lastModified: null };
+      return { title: detail.matrix.name, webUrl: docUrl('compatibility', slug), content: renderMatrix(detail.matrix), lastModified: null };
     }
   } catch { /* not a matrix slug */ }
 
