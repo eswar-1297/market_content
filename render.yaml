@@ -12,6 +12,11 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      # Persist all data on the mounted disk (matches the disk mountPath above).
+      - key: DATA_DIR
+        value: /opt/render/project/src/server/data
+      - key: CFTOOLS_DOCS_URL
+        value: https://doc.cftools.live
       - key: PUPPETEER_SKIP_CHROMIUM_DOWNLOAD
         value: "true"
       - key: PUPPETEER_SKIP_DOWNLOAD
@@ -51,16 +56,6 @@ services:
       - key: COPYLEAKS_EMAIL
         sync: false
       - key: COPYLEAKS_API_KEY
-        sync: false
-      - key: MS_TENANT_ID
-        sync: false
-      - key: MS_CLIENT_ID
-        sync: false
-      - key: MS_CLIENT_SECRET
-        sync: false
-      - key: SHAREPOINT_HOST
-        sync: false
-      - key: SHAREPOINT_SITE
         sync: false
       - key: AUTH_TENANT_ID
         sync: false

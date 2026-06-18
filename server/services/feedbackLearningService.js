@@ -1,9 +1,7 @@
 import { readFileSync, writeFileSync, existsSync } from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { dataPath } from '../config/paths.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const RULES_FILE = join(__dirname, '..', 'data', 'learned-rules.json');
+const RULES_FILE = dataPath('learned-rules.json');
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // FEEDBACK LEARNING SERVICE

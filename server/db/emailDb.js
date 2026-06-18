@@ -1,13 +1,7 @@
 import Database from 'better-sqlite3';
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
-import { existsSync, mkdirSync } from 'fs';
+import { dataPath } from '../config/paths.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = join(__dirname, '..', 'data');
-if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
-
-const DB_PATH = join(DATA_DIR, 'email.db');
+const DB_PATH = dataPath('email.db');
 const db = new Database(DB_PATH);
 
 db.pragma('journal_mode = WAL');

@@ -1,11 +1,9 @@
 import axios from 'axios';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
+import { DATA_DIR, dataPath } from '../config/paths.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const CACHE_DIR = join(__dirname, '..', 'data');
-const CACHE_FILE = join(CACHE_DIR, 'articles-cache.json');
+const CACHE_DIR = DATA_DIR;
+const CACHE_FILE = dataPath('articles-cache.json');
 
 const WP_API = 'https://www.cloudfuze.com/wp-json/wp/v2';
 const PER_PAGE = 100;

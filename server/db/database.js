@@ -2,11 +2,9 @@
 // Data persists across requests but resets on server restart
 
 import { readFileSync, writeFileSync, existsSync } from 'fs'
-import { join, dirname } from 'path'
-import { fileURLToPath } from 'url'
+import { dataPath } from '../config/paths.js'
 
-const __dirname = dirname(fileURLToPath(import.meta.url))
-const DATA_FILE = join(__dirname, 'bookmarks.json')
+const DATA_FILE = dataPath('bookmarks.json')
 
 let bookmarks = []
 let nextId = 1
