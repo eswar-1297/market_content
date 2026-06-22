@@ -11,6 +11,7 @@ import { crossReferenceQuoraSearch } from './threadFinder/crossReferenceQuora.js
 import { crossReferenceMicrosoftTechSearch } from './threadFinder/crossReferenceMicrosoftTech.js';
 import { crossReferenceGoogleCommunitySearch } from './threadFinder/crossReferenceGoogleCommunity.js';
 import { getArticles } from './articlesService.js';
+import { getCaseStudies } from './caseStudiesService.js';
 import { checkAIDetection, checkPlagiarism, isCopyleaksConfigured, isPlagiarismConfigured } from './contentCheckService.js';
 import { searchAndFetchContent, getPageByUrl, isCftoolsDocsConfigured } from './cftoolsDocsService.js';
 import { getWriterBio, formatWriterBioForPrompt } from '../config/writerBios.js';
@@ -686,7 +687,7 @@ export const AGENT_TOOLS_OPENAI = [
     type: 'function',
     function: {
       name: 'browse_published_articles',
-      description: "Browse or search CloudFuze's published articles on the website. Use this when the writer asks to see published articles, wants to find articles by a specific author, check what has been published recently, find articles related to a topic for internal linking, or asks 'show me articles about X'. Supports keyword/topic search to find relevant articles. Returns titles, authors, URLs, and publish dates.",
+      description: "Browse or search CloudFuze's published BLOG articles on the website. Use this when the writer asks to see published articles, wants to find articles by a specific author, check what has been published recently, find articles related to a topic for internal linking, or asks 'show me articles about X'. Supports keyword/topic search to find relevant articles. Returns titles, authors, URLs, and publish dates. Do NOT use this for customer case studies — those are a separate content type; use search_case_studies instead.",
       parameters: {
         type: 'object',
         properties: {
@@ -694,6 +695,21 @@ export const AGENT_TOOLS_OPENAI = [
           author: { type: 'string', description: "Filter by author name as the user typed it (e.g. 'Pankaj Rai', 'Rashmi', 'Bhavani'). Pass the name exactly as mentioned by the user. Leave empty to show all authors." },
           period: { type: 'string', enum: ['7d', '30d', '3m', '6m', '1y', 'all'], description: 'Time period filter: 7d=last 7 days, 30d=last 30 days, 3m=3 months, 6m=6 months, 1y=1 year, all=all time.' },
           limit: { type: 'number', description: 'Max articles to return (default 20, max 50)' }
+        },
+        required: []
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'search_case_studies',
+      description: "Find CloudFuze's REAL customer case studies — actual published customer success stories (e.g. 'Washington Post migrated 1500+ users to Google Workspace', 'Boston Medical Center moved 9,000+ users from Box to Microsoft 365'). Use this whenever the writer asks for case studies, customer stories, success stories, customer references, or real-world examples/proof. These are dedicated case-study pages on cloudfuze.com — NOT blog articles. Do NOT use browse_published_articles for case studies; that returns blog posts that merely mention the words 'case study'. Returns the customer/company, the migration (source→destination platforms), a short summary, and the direct URL.",
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: "Optional filter — match by company name (e.g. 'Intuit'), platform (e.g. 'Google Workspace', 'Box to Microsoft 365', 'Slack'), or industry (e.g. 'healthcare', 'education', 'university'). Leave empty to list all case studies." },
+          limit: { type: 'number', description: 'Max case studies to return (default 20, max 30)' }
         },
         required: []
       }
@@ -1935,6 +1951,42 @@ Put 5-6 as high, 3-4 as medium. High = questions ChatGPT/Gemini would cite answe
 
       const header = `Here are all ${totalFound} community threads for "${query}" (${sourcesSummary.join(' | ')}):\n`;
       return header + '\n' + sections.join('\n\n');
+    }
+
+    case 'search_case_studies': {
+      try {
+        const queryInput = (args.query || '').toString().trim();
+        const limit = Math.min(parseInt(args.limit) || 20, 30);
+        const studies = await getCaseStudies({ query: queryInput });
+
+        if (!studies || studies.length === 0) {
+          return JSON.stringify({
+            found: 0,
+            ...(queryInput && { query: queryInput }),
+            message: queryInput
+              ? `No CloudFuze customer case studies found matching "${queryInput}". Try a company name, platform (e.g. "Google Workspace", "Box"), or leave the query empty to see all case studies.`
+              : 'No CloudFuze customer case studies found.'
+          });
+        }
+
+        return JSON.stringify({
+          found: studies.length,
+          showing: Math.min(studies.length, limit),
+          ...(queryInput && { query: queryInput }),
+          note: 'These are real CloudFuze customer case studies (success stories), not blog articles. Present each with the customer name, what migration was done (source → destination), and a clickable link. Use them as social proof / real-world examples.',
+          caseStudies: studies.slice(0, limit).map(cs => ({
+            company: cs.company,
+            title: cs.title,
+            url: cs.url,
+            platforms: cs.platforms,
+            summary: cs.summary || undefined,
+            date: cs.date ? cs.date.substring(0, 10) : null,
+            ...(cs.relevance !== undefined && { relevance: cs.relevance })
+          }))
+        });
+      } catch (e) {
+        return JSON.stringify({ error: `Failed to fetch case studies: ${e.message}` });
+      }
     }
 
     case 'browse_published_articles': {

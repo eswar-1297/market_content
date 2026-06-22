@@ -103,6 +103,11 @@ const server = app.listen(PORT, () => {
     preloadArticles();
   });
 
+  // Preload customer case studies cache in background
+  import('./services/caseStudiesService.js').then(({ preloadCaseStudies }) => {
+    preloadCaseStudies();
+  });
+
   // Preload YouTube video cache in background so first analysis is fast
   const ytKey = process.env.YOUTUBE_API_KEY;
   if (ytKey && ytKey !== 'your-youtube-api-key-here') {
