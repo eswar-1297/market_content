@@ -1004,7 +1004,7 @@ export const AGENT_TOOLS_GEMINI = AGENT_TOOLS_OPENAI.map(t => ({
 export async function executeTool(toolName, args, writerId = 'default', articleRequirements = {}) {
   switch (toolName) {
     case 'search_past_articles': {
-      const results = findRelatedArticles(writerId, args.query || '');
+      const results = await findRelatedArticles(writerId, args.query || '');
       if (results.length === 0) return JSON.stringify({ found: 0, message: 'No related past articles found.' });
       return JSON.stringify({
         found: results.length,
@@ -1570,7 +1570,7 @@ export async function executeTool(toolName, args, writerId = 'default', articleR
     }
 
     case 'get_writer_profile': {
-      const profile = getWriterProfile(writerId);
+      const profile = await getWriterProfile(writerId);
       if (!profile) return JSON.stringify({ message: 'No writer profile yet. The writer hasn\'t saved any articles to memory.' });
       return JSON.stringify({
         totalArticles: profile.total_articles,
@@ -1582,7 +1582,7 @@ export async function executeTool(toolName, args, writerId = 'default', articleR
     }
 
     case 'search_article_chunks': {
-      const chunks = searchChunks(writerId, args.query || '', 5);
+      const chunks = await searchChunks(writerId, args.query || '', 5);
       if (chunks.length === 0) return JSON.stringify({ found: 0, message: 'No matching content sections found.' });
       return JSON.stringify({
         found: chunks.length,
@@ -1597,7 +1597,7 @@ export async function executeTool(toolName, args, writerId = 'default', articleR
     }
 
     case 'list_all_articles': {
-      const articles = listArticles(writerId, 30);
+      const articles = await listArticles(writerId, 30);
       if (articles.length === 0) return JSON.stringify({ count: 0, message: 'No articles saved to memory yet.' });
       return JSON.stringify({
         count: articles.length,
@@ -2816,8 +2816,8 @@ RULES:
         if (!getInternalProvider()) return JSON.stringify({ error: 'No AI API key configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY in .env' });
 
         // Gather writer context
-        const writerProfile = getWriterProfile(writerId);
-        const pastArticles = findRelatedArticles(writerId, topicStr);
+        const writerProfile = await getWriterProfile(writerId);
+        const pastArticles = await findRelatedArticles(writerId, topicStr);
 
         // ═══ AUTO-FETCH MIGRATION DOCS PRODUCT DATA ═══
         // Every CloudFuze article benefits from real product data.

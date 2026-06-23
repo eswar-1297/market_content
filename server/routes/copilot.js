@@ -81,7 +81,7 @@ router.post('/chat', async (req, res) => {
 
     let activeSessionId = sessionId || null;
     if (activeSessionId) {
-      const sessionExists = !!getSession(activeSessionId);
+      const sessionExists = !!(await getSession(activeSessionId));
       if (!sessionExists) activeSessionId = null;
     }
 
@@ -91,11 +91,11 @@ router.post('/chat', async (req, res) => {
         const writerId = req.user?.email || req.body.writerId || 'default';
         const writerName = req.user?.name || '';
         if (writerId !== 'default') {
-          createWriter(writerId, writerName || writerId.split('@')[0] || writerId, writerId);
+          await createWriter(writerId, writerName || writerId.split('@')[0] || writerId, writerId);
         }
         const id = randomUUID();
         const topicText = (writerContext?.topic || message.trim().substring(0, 80) || 'Chat Session').replace(/\n/g, ' ');
-        createSession({ id, writer_id: writerId, topic: topicText, content_type: '', framework: [], semantic_keywords: {}, current_content: '' });
+        await createSession({ id, writer_id: writerId, topic: topicText, content_type: '', framework: [], semantic_keywords: {}, current_content: '' });
         activeSessionId = id;
         console.log(`[Chat] Auto-created session ${id} for writer ${writerId}`);
       } catch (e) {
@@ -131,9 +131,9 @@ router.post('/chat', async (req, res) => {
       : `${message.trim()}${imageNote}`;
 
     if (activeSessionId) {
-      saveChatMessage(activeSessionId, 'user', userMessageWithAttachments);
+      await saveChatMessage(activeSessionId, 'user', userMessageWithAttachments);
       if (currentContent) {
-        updateSession(activeSessionId, { current_content: currentContent });
+        await updateSession(activeSessionId, { current_content: currentContent });
       }
     }
 
@@ -188,12 +188,12 @@ router.post('/chat', async (req, res) => {
     }
 
     if (activeSessionId) {
-      saveChatMessage(activeSessionId, 'assistant', content, toolSteps, true);
+      await saveChatMessage(activeSessionId, 'assistant', content, toolSteps, true);
       if (generatedArticle) {
         const toolName = articleStep?.tool || 'generate_article';
         const labelMap = { generate_article: 'Generated article', edit_article: 'Edited article', generate_framework: 'Generated framework' };
-        saveContentSnapshot(activeSessionId, generatedArticle, labelMap[toolName] || 'Article update', 'agent');
-        updateSession(activeSessionId, { current_content: generatedArticle });
+        await saveContentSnapshot(activeSessionId, generatedArticle, labelMap[toolName] || 'Article update', 'agent');
+        await updateSession(activeSessionId, { current_content: generatedArticle });
       }
     }
 
@@ -224,7 +224,7 @@ router.post('/feedback', async (req, res) => {
     const writerId = req.user?.email || req.body.writerId || '';
     const sessionId = req.body.sessionId || '';
     const topic = req.body.topic || '';
-    saveFeedback({
+    await saveFeedback({
       traceId,
       sessionId,
       writerId,
@@ -446,42 +446,42 @@ router.post('/keywords/suggest', async (req, res) => {
 
 // --- Articles (Memory) ---
 
-router.get('/articles', (req, res) => {
+router.get('/articles', async (req, res) => {
   try {
     const { writerId = 'default', limit = 50 } = req.query;
-    const articles = listArticles(writerId, parseInt(limit));
+    const articles = await listArticles(writerId, parseInt(limit));
     res.json(articles);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.post('/articles', (req, res) => {
+router.post('/articles', async (req, res) => {
   try {
     const { title, content, url, topic, primaryKeyword, secondaryKeywords, writerId = 'default' } = req.body;
     if (!title?.trim() || !content?.trim()) return res.status(400).json({ error: 'Title and content are required' });
 
-    const result = ingestArticle({ writerId, title: title.trim(), content: content.trim(), url, topic, primaryKeyword, secondaryKeywords });
+    const result = await ingestArticle({ writerId, title: title.trim(), content: content.trim(), url, topic, primaryKeyword, secondaryKeywords });
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.delete('/articles/:id', (req, res) => {
+router.delete('/articles/:id', async (req, res) => {
   try {
-    const deleted = deleteArticle(req.params.id);
+    const deleted = await deleteArticle(req.params.id);
     res.json({ deleted });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.get('/articles/related', (req, res) => {
+router.get('/articles/related', async (req, res) => {
   try {
     const { topic, writerId = 'default' } = req.query;
     if (!topic) return res.json([]);
-    const results = findRelatedArticles(writerId, topic);
+    const results = await findRelatedArticles(writerId, topic);
     res.json(results);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -490,7 +490,7 @@ router.get('/articles/related', (req, res) => {
 
 // --- Sessions ---
 
-router.get('/sessions', (req, res) => {
+router.get('/sessions', async (req, res) => {
   try {
     const authEmail = req.user?.email;
     const clientWriterId = req.query.writerId || 'default';
@@ -498,7 +498,7 @@ router.get('/sessions', (req, res) => {
 
     // Always merge sessions from the primary writer ID + 'default' to catch sessions
     // created before auth was configured or during token initialization race conditions.
-    const primarySessions = listSessions(primaryId);
+    const primarySessions = await listSessions(primaryId);
     const seen = new Set(primarySessions.map(s => s.id));
 
     // Also fetch 'default' sessions and client-sent writerId sessions (if different)
@@ -508,7 +508,7 @@ router.get('/sessions', (req, res) => {
 
     let merged = [...primarySessions];
     for (const extraId of extraIds) {
-      const extra = listSessions(extraId);
+      const extra = await listSessions(extraId);
       for (const s of extra) {
         if (!seen.has(s.id)) { merged.push(s); seen.add(s.id); }
       }
@@ -521,26 +521,26 @@ router.get('/sessions', (req, res) => {
   }
 });
 
-router.post('/sessions', (req, res) => {
+router.post('/sessions', async (req, res) => {
   try {
     const writerId = req.user?.email || req.body.writerId || 'default';
     const writerName = req.user?.name || req.body.writerName || '';
     const { topic } = req.body;
     if (!topic?.trim()) return res.status(400).json({ error: 'Topic is required' });
     if (writerId !== 'default') {
-      createWriter(writerId, writerName || writerId.split('@')[0] || writerId, writerId);
+      await createWriter(writerId, writerName || writerId.split('@')[0] || writerId, writerId);
     }
     const id = randomUUID();
-    const session = createSession({ id, writer_id: writerId, topic: topic.trim(), content_type: '', framework: [], semantic_keywords: {}, current_content: '' });
+    const session = await createSession({ id, writer_id: writerId, topic: topic.trim(), content_type: '', framework: [], semantic_keywords: {}, current_content: '' });
     res.json(session);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.get('/sessions/:id', (req, res) => {
+router.get('/sessions/:id', async (req, res) => {
   try {
-    const session = getSession(req.params.id);
+    const session = await getSession(req.params.id);
     if (!session) return res.status(404).json({ error: 'Session not found' });
     res.json(session);
   } catch (err) {
@@ -548,18 +548,18 @@ router.get('/sessions/:id', (req, res) => {
   }
 });
 
-router.get('/sessions/:id/messages', (req, res) => {
+router.get('/sessions/:id/messages', async (req, res) => {
   try {
-    const messages = getSessionMessages(req.params.id);
+    const messages = await getSessionMessages(req.params.id);
     res.json(messages);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.patch('/sessions/:id', (req, res) => {
+router.patch('/sessions/:id', async (req, res) => {
   try {
-    const updated = updateSession(req.params.id, req.body);
+    const updated = await updateSession(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: 'Session not found' });
     res.json(updated);
   } catch (err) {
@@ -567,9 +567,9 @@ router.patch('/sessions/:id', (req, res) => {
   }
 });
 
-router.delete('/sessions/:id', (req, res) => {
+router.delete('/sessions/:id', async (req, res) => {
   try {
-    const deleted = deleteSession(req.params.id);
+    const deleted = await deleteSession(req.params.id);
     res.json({ deleted });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -578,18 +578,18 @@ router.delete('/sessions/:id', (req, res) => {
 
 // --- Content Snapshots ---
 
-router.get('/sessions/:id/snapshots', (req, res) => {
+router.get('/sessions/:id/snapshots', async (req, res) => {
   try {
-    const snapshots = getContentSnapshots(req.params.id);
+    const snapshots = await getContentSnapshots(req.params.id);
     res.json(snapshots);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.get('/snapshots/:snapshotId', (req, res) => {
+router.get('/snapshots/:snapshotId', async (req, res) => {
   try {
-    const snapshot = getSnapshotContent(parseInt(req.params.snapshotId));
+    const snapshot = await getSnapshotContent(parseInt(req.params.snapshotId));
     if (!snapshot) return res.status(404).json({ error: 'Snapshot not found' });
     res.json(snapshot);
   } catch (err) {
@@ -597,21 +597,21 @@ router.get('/snapshots/:snapshotId', (req, res) => {
   }
 });
 
-router.post('/sessions/:id/snapshots', (req, res) => {
+router.post('/sessions/:id/snapshots', async (req, res) => {
   try {
     const { content, label } = req.body;
     if (!content?.trim()) return res.status(400).json({ error: 'Content is required' });
-    saveContentSnapshot(req.params.id, content, label || 'Manual save', 'manual');
-    const snapshots = getContentSnapshots(req.params.id);
+    await saveContentSnapshot(req.params.id, content, label || 'Manual save', 'manual');
+    const snapshots = await getContentSnapshots(req.params.id);
     res.json(snapshots);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.delete('/snapshots/:snapshotId', (req, res) => {
+router.delete('/snapshots/:snapshotId', async (req, res) => {
   try {
-    const deleted = deleteContentSnapshot(parseInt(req.params.snapshotId));
+    const deleted = await deleteContentSnapshot(parseInt(req.params.snapshotId));
     res.json({ deleted });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -620,10 +620,10 @@ router.delete('/snapshots/:snapshotId', (req, res) => {
 
 // --- Writer Profile ---
 
-router.get('/profile', (req, res) => {
+router.get('/profile', async (req, res) => {
   try {
     const { writerId = 'default' } = req.query;
-    const profile = getWriterProfile(writerId);
+    const profile = await getWriterProfile(writerId);
     res.json(profile || { writer_id: writerId, total_articles: 0 });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -646,19 +646,19 @@ router.post('/profile/analyze', async (req, res) => {
 
 // --- Writers ---
 
-router.get('/writers', (req, res) => {
+router.get('/writers', async (req, res) => {
   try {
-    res.json(listWriters());
+    res.json(await listWriters());
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.post('/writers', (req, res) => {
+router.post('/writers', async (req, res) => {
   try {
     const { id, name, email } = req.body;
     if (!id || !name) return res.status(400).json({ error: 'ID and name are required' });
-    const writer = createWriter(id, name, email || '');
+    const writer = await createWriter(id, name, email || '');
     res.json(writer);
   } catch (err) {
     res.status(500).json({ error: err.message });

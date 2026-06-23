@@ -86,11 +86,22 @@ app.use((err, req, res, _next) => {
   });
 });
 
-initializeDatabase().catch(err => console.warn('Bookmark DB init:', err.message));
-initSendGrid();
+let server;
 
-const server = app.listen(PORT, () => {
-  console.log(`Content Guidelines API server running on http://localhost:${PORT}`);
+async function bootstrap() {
+  // Postgres must be reachable and migrated before we accept requests.
+  const { waitForDb } = await import('./db/pool.js');
+  const { initCopilotDb } = await import('./db/copilotDb.js');
+  const { initEmailDb } = await import('./db/emailDb.js');
+  await waitForDb();
+  await initCopilotDb();
+  await initEmailDb();
+
+  initializeDatabase().catch(err => console.warn('Bookmark DB init:', err.message));
+  initSendGrid();
+
+  server = app.listen(PORT, () => {
+    console.log(`Content Guidelines API server running on http://localhost:${PORT}`);
 
   // Initialize Langfuse if keys are configured
   import('./services/langfuseService.js').then(({ getLangfuse }) => {
@@ -117,11 +128,18 @@ const server = app.listen(PORT, () => {
         .catch(err => console.warn('YouTube preload skipped:', err.message));
     });
   }
+  });
+}
+
+bootstrap().catch(err => {
+  console.error('Fatal: failed to start server —', err.message);
+  process.exit(1);
 });
 
 // Graceful shutdown
 function shutdown(signal) {
   console.log(`\n${signal} received. Shutting down gracefully...`);
+  if (!server) { process.exit(0); return; }
   server.close(async () => {
     console.log('Server closed.');
     try {

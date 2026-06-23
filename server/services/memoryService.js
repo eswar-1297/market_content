@@ -88,7 +88,7 @@ function detectContentType(title, content) {
 /**
  * Ingest a new article into the memory system.
  */
-export function ingestArticle({ writerId, title, content, url, topic, primaryKeyword, secondaryKeywords }) {
+export async function ingestArticle({ writerId, title, content, url, topic, primaryKeyword, secondaryKeywords }) {
   const id = uuidv4();
   const wordCount = countWords(content);
   const contentType = detectContentType(title, content);
@@ -96,7 +96,7 @@ export function ingestArticle({ writerId, title, content, url, topic, primaryKey
   const chunks = chunkContent(content);
   const frameworkUsed = chunks.map(c => c.section_type).filter(t => t !== 'content');
 
-  const article = saveArticle({
+  const article = await saveArticle({
     id,
     writer_id: writerId || 'default',
     title,
@@ -111,8 +111,8 @@ export function ingestArticle({ writerId, title, content, url, topic, primaryKey
     published_at: new Date().toISOString()
   });
 
-  saveChunks(id, chunks);
-  rebuildWriterProfile(writerId || 'default');
+  await saveChunks(id, chunks);
+  await rebuildWriterProfile(writerId || 'default');
 
   return { article, chunksCreated: chunks.length };
 }
@@ -120,12 +120,12 @@ export function ingestArticle({ writerId, title, content, url, topic, primaryKey
 /**
  * Find articles related to a topic by searching title, topic, keywords, and content.
  */
-export function findRelatedArticles(writerId, topic) {
+export async function findRelatedArticles(writerId, topic) {
   const words = topic.split(/\s+/).filter(w => w.length > 3);
   const allResults = new Map();
 
   for (const word of words.slice(0, 5)) {
-    const results = searchArticles(writerId, word);
+    const results = await searchArticles(writerId, word);
     for (const r of results) {
       if (!allResults.has(r.id)) {
         allResults.set(r.id, { ...r, matchScore: 1 });
@@ -135,7 +135,7 @@ export function findRelatedArticles(writerId, topic) {
     }
   }
 
-  const fullSearch = searchArticles(writerId, topic);
+  const fullSearch = await searchArticles(writerId, topic);
   for (const r of fullSearch) {
     if (!allResults.has(r.id)) {
       allResults.set(r.id, { ...r, matchScore: 3 });
@@ -152,15 +152,15 @@ export function findRelatedArticles(writerId, topic) {
 /**
  * Search through article chunks for relevant content snippets.
  */
-export function findRelevantChunks(writerId, query, limit = 10) {
+export async function findRelevantChunks(writerId, query, limit = 10) {
   return searchChunks(writerId, query, limit);
 }
 
 /**
  * Rebuild the writer's profile based on all their articles.
  */
-export function rebuildWriterProfile(writerId) {
-  const articles = listArticles(writerId, 200);
+export async function rebuildWriterProfile(writerId) {
+  const articles = await listArticles(writerId, 200);
   if (articles.length === 0) return null;
 
   const totalWords = articles.reduce((sum, a) => sum + (a.word_count || 0), 0);
@@ -182,7 +182,7 @@ export function rebuildWriterProfile(writerId) {
     .slice(0, 10)
     .map(([topic]) => topic);
 
-  return saveWriterProfile({
+  return await saveWriterProfile({
     writer_id: writerId,
     avg_word_count: avgWordCount,
     preferred_frameworks: typeCounts,

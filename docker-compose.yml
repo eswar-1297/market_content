@@ -1,0 +1,66 @@
+# CloudFuze Content Agent — app + PostgreSQL.
+#
+# Quick start:
+#   1. Copy .env.docker.example to .env and fill in your API keys / Microsoft auth.
+#   2. (Optional) To migrate existing SQLite data, drop the old copilot.db and
+#      email.db into the `appdata` volume BEFORE first start — see MIGRATION below.
+#   3. docker compose up -d --build
+#
+# MIGRATION (one-time): the app auto-imports legacy SQLite on first boot if it
+# finds the .db files in DATA_DIR (/data). Seed them into the volume first:
+#   docker compose up -d db
+#   docker compose run --rm --no-deps -v "$(pwd)/server/data:/seed" app \
+#     sh -c "cp /seed/copilot.db /seed/email.db /data/ 2>/dev/null || true"
+# Then `docker compose up -d --build app`. On boot you'll see
+# "migrated N rows from legacy SQLite". It runs once (tracked in schema_meta).
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: cloudfuze
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: cloudfuze
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cloudfuze -d cloudfuze"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "3001:3001"
+    environment:
+      NODE_ENV: production
+      DATA_DIR: /data
+      DATABASE_URL: postgres://cloudfuze:${POSTGRES_PASSWORD:-changeme}@db:5432/cloudfuze
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3001}
+      CFTOOLS_DOCS_URL: ${CFTOOLS_DOCS_URL:-https://doc.cftools.live}
+      # AI providers (at least one required for AI features)
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Optional integrations
+      YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
+      GOOGLE_CSE_KEY: ${GOOGLE_CSE_KEY:-}
+      GOOGLE_CSE_CX: ${GOOGLE_CSE_CX:-}
+      SENDGRID_API_KEY: ${SENDGRID_API_KEY:-}
+      SENDGRID_FROM_EMAIL: ${SENDGRID_FROM_EMAIL:-}
+      # Microsoft Entra ID auth — REQUIRED for per-user history (else everyone
+      # shares the 'default' bucket). Set both in your .env.
+      AUTH_TENANT_ID: ${AUTH_TENANT_ID:-}
+      AUTH_CLIENT_ID: ${AUTH_CLIENT_ID:-}
+    volumes:
+      - appdata:/data
+
+volumes:
+  pgdata:
+  appdata:

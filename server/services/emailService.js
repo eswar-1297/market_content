@@ -52,16 +52,16 @@ function wrapClickTracking(html, trackingId) {
 }
 
 export async function sendCampaign(campaignId) {
-  const campaign = getCampaignById(campaignId);
+  const campaign = await getCampaignById(campaignId);
   if (!campaign) throw new Error('Campaign not found');
   if (campaign.status === 'sent') throw new Error('Campaign already sent');
 
-  const subscribedContacts = getContacts({ subscribed: true });
+  const subscribedContacts = await getContacts({ subscribed: true });
   if (subscribedContacts.length === 0) throw new Error('No subscribed contacts');
 
   const contactIds = subscribedContacts.map(c => c.id);
   const trackingIds = subscribedContacts.map(() => uuidv4());
-  addCampaignRecipients(campaignId, contactIds, trackingIds);
+  await addCampaignRecipients(campaignId, contactIds, trackingIds);
 
   const hasSendGrid = !!process.env.SENDGRID_API_KEY;
   const fromEmail = process.env.SENDGRID_FROM_EMAIL || 'noreply@cloudfuze.com';
@@ -89,19 +89,19 @@ export async function sendCampaign(campaignId) {
           subject: campaign.subject.replace(/\{\{name\}\}/gi, contact.name || 'there'),
           html: personalizedHtml,
         });
-        markRecipientSent(tid);
+        await markRecipientSent(tid);
         sentCount++;
       } catch (err) {
         errors.push({ email: contact.email, error: err.message });
         console.error(`Failed to send to ${contact.email}:`, err.message);
       }
     } else {
-      markRecipientSent(tid);
+      await markRecipientSent(tid);
       sentCount++;
       console.log(`[Simulated] Email sent to ${contact.email} (tracking: ${tid})`);
     }
   }
 
-  markCampaignSent(campaignId, sentCount);
+  await markCampaignSent(campaignId, sentCount);
   return { sentCount, totalRecipients: subscribedContacts.length, errors };
 }

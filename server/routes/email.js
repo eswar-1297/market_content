@@ -12,50 +12,50 @@ const router = express.Router();
 
 // ─── Contacts ──────────────────────────────────────────────────────────────
 
-router.get('/email/contacts', (req, res) => {
+router.get('/email/contacts', async (req, res) => {
   try {
-    const contacts = getContacts();
+    const contacts = await getContacts();
     res.json({ contacts });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.post('/email/contacts', (req, res) => {
+router.post('/email/contacts', async (req, res) => {
   try {
     const { email, name, tags } = req.body;
     if (!email) return res.status(400).json({ error: 'Email is required' });
-    addContact({ email, name, tags });
+    await addContact({ email, name, tags });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.post('/email/contacts/bulk', (req, res) => {
+router.post('/email/contacts/bulk', async (req, res) => {
   try {
     const { contacts } = req.body;
     if (!Array.isArray(contacts)) return res.status(400).json({ error: 'contacts array required' });
-    const added = addContactsBulk(contacts);
+    const added = await addContactsBulk(contacts);
     res.json({ success: true, added });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.delete('/email/contacts/:id', (req, res) => {
+router.delete('/email/contacts/:id', async (req, res) => {
   try {
-    deleteContact(Number(req.params.id));
+    await deleteContact(Number(req.params.id));
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.patch('/email/contacts/:id/subscription', (req, res) => {
+router.patch('/email/contacts/:id/subscription', async (req, res) => {
   try {
     const { subscribed } = req.body;
-    toggleSubscription(Number(req.params.id), subscribed);
+    await toggleSubscription(Number(req.params.id), subscribed);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -64,28 +64,28 @@ router.patch('/email/contacts/:id/subscription', (req, res) => {
 
 // ─── Templates ─────────────────────────────────────────────────────────────
 
-router.get('/email/templates', (req, res) => {
+router.get('/email/templates', async (req, res) => {
   try {
-    res.json({ templates: getTemplates() });
+    res.json({ templates: await getTemplates() });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.post('/email/templates', (req, res) => {
+router.post('/email/templates', async (req, res) => {
   try {
     const { name, subject, html_body } = req.body;
     if (!name || !subject || !html_body) return res.status(400).json({ error: 'name, subject, html_body required' });
-    const result = createTemplate({ name, subject, html_body });
+    const result = await createTemplate({ name, subject, html_body });
     res.json({ success: true, id: result.lastInsertRowid });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.get('/email/templates/:id', (req, res) => {
+router.get('/email/templates/:id', async (req, res) => {
   try {
-    const t = getTemplateById(Number(req.params.id));
+    const t = await getTemplateById(Number(req.params.id));
     if (!t) return res.status(404).json({ error: 'Template not found' });
     res.json({ template: t });
   } catch (err) {
@@ -93,19 +93,19 @@ router.get('/email/templates/:id', (req, res) => {
   }
 });
 
-router.put('/email/templates/:id', (req, res) => {
+router.put('/email/templates/:id', async (req, res) => {
   try {
     const { name, subject, html_body } = req.body;
-    updateTemplate(Number(req.params.id), { name, subject, html_body });
+    await updateTemplate(Number(req.params.id), { name, subject, html_body });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.delete('/email/templates/:id', (req, res) => {
+router.delete('/email/templates/:id', async (req, res) => {
   try {
-    deleteTemplate(Number(req.params.id));
+    await deleteTemplate(Number(req.params.id));
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -114,30 +114,30 @@ router.delete('/email/templates/:id', (req, res) => {
 
 // ─── Campaigns ─────────────────────────────────────────────────────────────
 
-router.get('/email/campaigns', (req, res) => {
+router.get('/email/campaigns', async (req, res) => {
   try {
-    res.json({ campaigns: getCampaigns() });
+    res.json({ campaigns: await getCampaigns() });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.post('/email/campaigns', (req, res) => {
+router.post('/email/campaigns', async (req, res) => {
   try {
     const { name, subject, html_body, template_id } = req.body;
     if (!name || !subject || !html_body) return res.status(400).json({ error: 'name, subject, html_body required' });
-    const result = createCampaign({ name, subject, html_body, template_id });
+    const result = await createCampaign({ name, subject, html_body, template_id });
     res.json({ success: true, id: result.lastInsertRowid });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.get('/email/campaigns/:id', (req, res) => {
+router.get('/email/campaigns/:id', async (req, res) => {
   try {
-    const c = getCampaignById(Number(req.params.id));
+    const c = await getCampaignById(Number(req.params.id));
     if (!c) return res.status(404).json({ error: 'Campaign not found' });
-    const recipients = getCampaignRecipients(c.id);
+    const recipients = await getCampaignRecipients(c.id);
     res.json({ campaign: c, recipients });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -153,9 +153,9 @@ router.post('/email/campaigns/:id/send', async (req, res) => {
   }
 });
 
-router.delete('/email/campaigns/:id', (req, res) => {
+router.delete('/email/campaigns/:id', async (req, res) => {
   try {
-    deleteCampaign(Number(req.params.id));
+    await deleteCampaign(Number(req.params.id));
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -164,9 +164,9 @@ router.delete('/email/campaigns/:id', (req, res) => {
 
 // ─── Analytics ─────────────────────────────────────────────────────────────
 
-router.get('/email/analytics', (req, res) => {
+router.get('/email/analytics', async (req, res) => {
   try {
-    res.json(getAnalytics());
+    res.json(await getAnalytics());
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -176,21 +176,21 @@ router.get('/email/analytics', (req, res) => {
 
 const TRANSPARENT_GIF = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
 
-router.get('/email/track/open/:trackingId', (req, res) => {
-  recordOpen(req.params.trackingId);
+router.get('/email/track/open/:trackingId', async (req, res) => {
+  await recordOpen(req.params.trackingId).catch(() => {});
   res.set({ 'Content-Type': 'image/gif', 'Cache-Control': 'no-store, no-cache, must-revalidate' });
   res.send(TRANSPARENT_GIF);
 });
 
-router.get('/email/track/click/:trackingId', (req, res) => {
-  recordClick(req.params.trackingId);
+router.get('/email/track/click/:trackingId', async (req, res) => {
+  await recordClick(req.params.trackingId).catch(() => {});
   const url = req.query.url;
   if (url) return res.redirect(url);
   res.redirect('/');
 });
 
-router.get('/email/unsubscribe/:trackingId', (req, res) => {
-  const success = unsubscribeByTrackingId(req.params.trackingId);
+router.get('/email/unsubscribe/:trackingId', async (req, res) => {
+  const success = await unsubscribeByTrackingId(req.params.trackingId);
   res.send(`
     <!DOCTYPE html>
     <html><head><title>Unsubscribed</title>

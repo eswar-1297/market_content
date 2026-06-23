@@ -10,18 +10,18 @@ import { analyzeContent } from './ruleEngine.js';
  * Combines AI generation with past article memory.
  */
 export async function generateWritingPlan(topic, writerId, aiProvider) {
-  const pastArticles = findRelatedArticles(writerId, topic);
-  const allArticles = listArticles(writerId, 50);
-  const writerProfile = getWriterProfile(writerId);
+  const pastArticles = await findRelatedArticles(writerId, topic);
+  const allArticles = await listArticles(writerId, 50);
+  const writerProfile = await getWriterProfile(writerId);
 
   const prompt = buildPlanPrompt(topic, pastArticles.length > 0 ? pastArticles : allArticles.slice(0, 10), writerProfile);
   const plan = await callAI(prompt, COPILOT_SYSTEM_PROMPT, aiProvider);
 
   if (writerId !== 'default') {
-    createWriter(writerId, writerId.split('@')[0] || writerId, writerId);
+    await createWriter(writerId, writerId.split('@')[0] || writerId, writerId);
   }
   const sessionId = uuidv4();
-  const session = createSession({
+  const session = await createSession({
     id: sessionId,
     writer_id: writerId,
     topic,
@@ -71,16 +71,16 @@ export async function getCorrections(content, topic, sectionContext, aiProvider)
  * Analyze writer profile using AI based on all their articles.
  */
 export async function analyzeWriterProfile(writerId, aiProvider) {
-  const articles = listArticles(writerId, 100);
+  const articles = await listArticles(writerId, 100);
   if (articles.length === 0) return null;
 
   const prompt = buildProfileAnalysisPrompt(articles);
   const analysis = await callAI(prompt, COPILOT_SYSTEM_PROMPT, aiProvider);
 
-  const existingProfile = getWriterProfile(writerId) || {};
+  const existingProfile = await getWriterProfile(writerId) || {};
   const { saveWriterProfile } = await import('../db/copilotDb.js');
 
-  saveWriterProfile({
+  await saveWriterProfile({
     writer_id: writerId,
     avg_word_count: existingProfile.avg_word_count || 0,
     preferred_frameworks: existingProfile.preferred_frameworks || {},
