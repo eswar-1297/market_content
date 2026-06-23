@@ -2,6 +2,9 @@
   "name": "content-guidelines-server",
   "version": "1.0.0",
   "type": "module",
+  "scripts": {
+    "migrate": "node scripts/migrate-sqlite-to-pg.js"
+  },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
     "@google/generative-ai": "^0.21.0",
