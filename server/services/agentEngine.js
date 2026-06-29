@@ -2287,6 +2287,10 @@ Put 5-6 as high, 3-4 as medium. High = questions ChatGPT/Gemini would cite answe
         }
         const allPublished = articlesResult.status === 'fulfilled' ? articlesResult.value : [];
         const spData = spResult.status === 'fulfilled' ? spResult.value : null;
+        const extRefs = extRefsResult.status === 'fulfilled' ? extRefsResult.value : null;
+
+        // Real, verified sources (with snippets) the framework must cite stats from
+        const sourcePoolContext = buildVerifiedSourcePool(extRefs);
 
         // Build Migration Docs context
         let spContext = '';
@@ -2444,7 +2448,7 @@ IMPORTANT: The topic below is just a topic name — NOT an H1 title. You MUST cr
 
 TOPIC: "${topicStr}"
 CONTENT TYPE: ${contentType}
-${isComparisonArticle(contentType, topicStr, additionalContext) ? `\n${COMPARISON_ARTICLE_BRIEF}\n\nPRECEDENCE: This is a comparison article. The B2B comparison structure ABOVE overrides the generic CSABF section order below — produce ALL of its sections (Intro Summary Block, Key Takeaways table, At-a-Glance table, the six question-format comparison H2s, Pros and Cons for BOTH products, the Migrating section, FAQ, and Final Verdict). Still keep the "How CloudFuze Helps" angle inside the Migrating section.\n` : ''}${additionalContext ? `ADDITIONAL CONTEXT: ${additionalContext}` : ''}${spContext}${faqFanoutContext}${fanoutStructureHint}
+${isComparisonArticle(contentType, topicStr, additionalContext) ? `\n${COMPARISON_ARTICLE_BRIEF}\n\nPRECEDENCE: This is a comparison article. The B2B comparison structure ABOVE overrides the generic CSABF section order below — produce ALL of its sections (Intro Summary Block, Key Takeaways table, At-a-Glance table, the six question-format comparison H2s, Pros and Cons for BOTH products, the Migrating section, FAQ, and Final Verdict). Still keep the "How CloudFuze Helps" angle inside the Migrating section.\n` : ''}${additionalContext ? `ADDITIONAL CONTEXT: ${additionalContext}` : ''}${spContext}${sourcePoolContext}${faqFanoutContext}${fanoutStructureHint}
 ${blogPatternsText}
 ${writerBioText ? `\n${writerBioText}` : ''}
 ${writerPatternsText ? `\n${writerPatternsText}\n\nCRITICAL: The framework MUST follow this writer's preferred article structure, H2 heading style, tone, and target audience. Match their actual published patterns.` : ''}
@@ -2523,11 +2527,13 @@ CUSTOMER ACQUISITION — How to structure for buyer conversion:
 - Do NOT include a separate "Conclusion" H2 — CloudFuze blogs end with the CloudFuze section + FAQs + a soft CTA paragraph
 
 MANDATORY CREDIBLE STATISTIC — EVERY FRAMEWORK MUST INCLUDE:
-- You MUST include at least ONE credible, topic-relevant statistic in the introduction section guide. This stat must come from a recognized source (Gartner, Forrester, IDC, McKinsey, Statista, Microsoft, Google, or industry reports).
-- Example: *"Include stat: 'According to Gartner, 85% of enterprises will adopt a cloud-first strategy by 2026.' This boosts AI citations by 40%."*
+- You MUST suggest at least ONE credible, topic-relevant statistic in the introduction section guide.
+- SOURCE EVERY STAT FROM THE VERIFIED SOURCE POOL ABOVE. When the prompt includes a "VERIFIED SOURCE POOL", every stat you suggest MUST be a real figure drawn from one of those snippets, and you MUST append the exact source URL next to it so the writer can verify it in one click.
+- Format each suggested stat as: *Stat: "[exact figure/claim]" — Source: [Title](exact URL from the pool)*. Example: *Stat: "Cloud adoption reached 94% among enterprises" — Source: [Flexera State of the Cloud](https://www.flexera.com/...).*
+- If NO pooled source supports a number for a section, do NOT invent one. Instead write: *Stat opportunity: [what kind of data would strengthen this] — ⚠️ STAT NEEDS SOURCE — writer to source before publishing.*
+- NEVER fabricate a percentage or attribute a number to a source whose snippet does not contain it. NEVER invent or shorten URLs.
 - The stat MUST be directly relevant to the article topic — not a generic cloud/IT stat.
-- Suggest 2-3 additional stat opportunities in body sections where data would strengthen the argument.
-- In the framework brief for each body section, suggest SPECIFIC stats or data points to include and their sources.
+- Suggest 2-3 additional stat opportunities in body sections, each tied to a pooled source URL (or flagged ⚠️ STAT NEEDS SOURCE if none exists).
 
 ADDITIONAL RULES:
 - Framework should have 10-14 sections total (including H1, intro, CloudFuze section, FAQs, and closing CTA — NO separate "Conclusion" H2)
@@ -2671,6 +2677,10 @@ You enforce these non-negotiables from writer feedback: intent before structure 
           console.log('  Framework: Could not process external references:', e.message);
         }
 
+        // Append suggested YouTube videos (real, from CloudFuze's channel)
+        const ytSection = await buildYouTubeVideosSection(topicStr);
+        if (ytSection) frameworkContent += ytSection;
+
         // Count sections
         const h2Count = (frameworkContent.match(/^##\s/gm) || []).length;
         const h3Count = (frameworkContent.match(/^###\s/gm) || []).length;
@@ -2681,10 +2691,11 @@ You enforce these non-negotiables from writer feedback: intent before structure 
           contentType,
           sectionCount: h2Count + h3Count,
           faqsGenerated: missingFaqs.length,
+          youtubeVideosSuggested: ytSection ? (ytSection.match(/^- /gm) || []).length : 0,
           totalQuestionsResearched: allFaqItems.length,
           questionsUsedAsHeadings: allFaqItems.length - missingFaqs.length,
           article: frameworkContent,
-          instruction: 'The framework has been inserted into the editor. The H2/H3 headings were derived from real FAQ and AI fanout research. Briefly summarize: (1) structure overview — number of sections and that headings are based on real search demand + AI engine decomposition, (2) how many FAQ/fanout questions were researched and how many were used as headings vs listed as suggested FAQs, (3) semantic keywords included, (4) internal linking articles found, (5) external reference links from credible sources included. Ask the writer if they want to modify the framework, swap any headings, select specific FAQs, or proceed with article generation.'
+          instruction: 'The framework has been inserted into the editor. The H2/H3 headings were derived from real FAQ and AI fanout research. Briefly summarize: (1) structure overview — number of sections and that headings are based on real search demand + AI engine decomposition, (2) how many FAQ/fanout questions were researched and how many were used as headings vs listed as suggested FAQs, (3) semantic keywords included, (4) internal linking articles found, (5) external reference links from credible sources included, (6) suggested YouTube videos included (if any). Ask the writer if they want to modify the framework, swap any headings, select specific FAQs, or proceed with article generation.'
         });
       } catch (e) {
         return JSON.stringify({ error: `Framework generation failed: ${e.message}` });
@@ -2868,6 +2879,20 @@ RULES:
           }
         }
 
+        // ═══ AUTO-FETCH REAL EXTERNAL SOURCES (with snippets) ═══
+        // So every statistic in the article is traceable to a real, verifiable
+        // URL the writer can check — instead of an AI-invented figure.
+        let verifiedSources = '';
+        try {
+          const extRefs = await import('./externalReferencesService.js')
+            .then(mod => mod.fetchExternalReferences(topicStr))
+            .catch(() => null);
+          verifiedSources = buildVerifiedSourcePool(extRefs);
+          if (verifiedSources) console.log(`🔗 [Sources] Verified source pool built with ${extRefs.allLinks.length} links for article generation`);
+        } catch (e) {
+          console.warn('External references fetch for article generation failed:', e.message);
+        }
+
         // Merge: stored articleRequirements (from session) ← overridden by explicit args
         const reqs = articleRequirements || {};
 
@@ -2887,13 +2912,20 @@ RULES:
         // Get writer bio for personalized content
         const writerBioPrompt = formatWriterBioForPrompt(reqs._writerName);
 
+        // FAQs: use approved ones if present, otherwise research real questions so
+        // the blog's FAQ section uses actual search demand (not AI-invented questions).
+        let articleFaqs = args.faqs?.length ? args.faqs : (reqs.faqs || []);
+        if (!articleFaqs.length) {
+          articleFaqs = await researchTopicFaqs(topicStr, getInternalProvider());
+        }
+
         const articlePrompt = buildArticleGenPrompt({
           topic: topicStr,
           primaryKeyword: args.primary_keyword || reqs.primaryKeyword || '',
           secondaryKeywords: args.secondary_keywords?.length ? args.secondary_keywords : (reqs.secondaryKeywords || []),
           lsiKeywords: args.lsi_keywords?.length ? args.lsi_keywords : (reqs.lsiKeywords || []),
           framework: args.framework?.length ? args.framework : (reqs.framework || []),
-          faqs: args.faqs?.length ? args.faqs : (reqs.faqs || []),
+          faqs: articleFaqs,
           contentType: args.content_type || reqs.contentType || 'educational',
           targetAudience: args.target_audience || reqs.targetAudience || '',
           additionalRequirements: [args.additional_requirements, reqs.notes].filter(Boolean).join('\n'),
@@ -2902,6 +2934,7 @@ RULES:
           pastArticles: pastArticles.slice(0, 5),
           editorFramework,
           sharepointContext,
+          verifiedSources,
           writerBio: writerBioPrompt,
           writerName: reqs._writerName || ''
         });
@@ -2963,11 +2996,17 @@ RULES:
           }
         }
 
+        // Append suggested YouTube videos (real, from CloudFuze's channel)
+        const ytSection = await buildYouTubeVideosSection(topicStr);
+        if (ytSection) articleBody += ytSection;
+
         return JSON.stringify({
           success: true,
           topic: topicStr,
           contentType: args.content_type || 'educational',
           wordCountEstimate: articleBody.split(/\s+/).length,
+          faqsResearched: articleFaqs.length,
+          youtubeVideosSuggested: ytSection ? (ytSection.match(/^- /gm) || []).length : 0,
           metaTitle,
           metaDescription,
           article: articleBody,
@@ -3499,8 +3538,8 @@ RULES FOR INLINE SOURCES:
    - Any section referencing Microsoft/Google/platform documentation
    - Any section citing research (Gartner, Forrester, IDC, McKinsey, Statista)
 5. Migration Docs sources: If CloudFuze internal Migration Docs data was provided in the prompt, cite it with its exact URL and mark it: 🔗 *Internal Migration Docs — verify product details*
-6. ONLY include real, verifiable URLs. Do NOT hallucinate URLs.
-7. If you cite a stat but are unsure of the exact URL, write: "[Source Name] — *⚠️ verify link before publishing*"
+6. VERIFIED SOURCE POOL IS THE SOURCE OF TRUTH: When the prompt includes a "VERIFIED SOURCE POOL", every statistic, percentage, or quantified market claim you write MUST come from one of those snippets and MUST be attributed to that source's EXACT URL (copied verbatim from the pool). Only state a specific number if it appears in that source's snippet.
+7. ONLY include real, verifiable URLs. NEVER hallucinate, shorten, or guess a URL. If a section needs a statistic but no pooled source supports one, do NOT invent a figure — state the point qualitatively and write: "⚠️ STAT NEEDS SOURCE — writer to source before publishing" in the source block instead of a fake citation.
 8. Aim for 2-4 sources per section that has factual claims
 9. This is for the WRITER'S reference before publishing — it will be removed from the final published version
 
@@ -3510,6 +3549,86 @@ OUTPUT FORMAT:
 - Do NOT collect sources at the end — they go under each section
 - Do NOT include any other preamble, notes, or commentary
 - Do NOT wrap in code blocks`;
+
+// Build a VERIFIED SOURCE POOL block from real, live-searched external references.
+// Each link's Google snippet usually contains the actual statistic text, so the
+// generator can cite REAL numbers tied to REAL URLs instead of inventing them.
+// Returns '' if there are no usable sources. Used by both generate_framework and
+// generate_article so every stat is traceable to a source a writer can verify.
+function buildVerifiedSourcePool(extRefs) {
+  const usable = (extRefs?.allLinks || []).filter(l => l.verified !== false && l.url);
+  if (!usable.length) return '';
+
+  const typeLabel = {
+    official_docs: 'Official Docs',
+    research: 'Research/Stats',
+    compliance: 'Compliance',
+    best_practices: 'Best Practices'
+  };
+
+  const lines = usable.slice(0, 12).map((l, i) => {
+    const label = typeLabel[l.type] || 'Reference';
+    const snip = l.snippet
+      ? ` — SNIPPET: "${l.snippet.replace(/\s+/g, ' ').trim().substring(0, 280)}"`
+      : ' — (no snippet captured; cite this page for context only — do NOT attribute a specific statistic to it)';
+    return `${i + 1}. [${label}] ${l.title} — ${l.url} (${l.domain})${snip}`;
+  }).join('\n');
+
+  return `
+
+VERIFIED SOURCE POOL — REAL, LIVE-SEARCHED SOURCES (cite stats ONLY from here):
+These links were found via live Google search and confirmed to exist. The SNIPPET is what the page actually says.
+STRICT SOURCING RULES — NON-NEGOTIABLE:
+- Every statistic, percentage, or quantified market claim MUST be traceable to one of these sources (or to CloudFuze product data provided elsewhere in this prompt). When you cite a stat, attribute it to that source's EXACT URL.
+- Only cite a specific number if it appears in that source's SNIPPET. Never attribute a figure to a source whose snippet does not contain it.
+- NEVER invent statistics and NEVER invent, shorten, or guess URLs — copy them exactly as listed above.
+- If a section would benefit from a statistic but no pooled source supports one, state the point qualitatively (no fabricated number) and append the marker "⚠️ STAT NEEDS SOURCE — writer to verify" so the writer knows to source it.
+${lines}`;
+}
+
+// Build a "Suggested YouTube Videos" markdown block for a topic. Returns '' if
+// no relevant CloudFuze videos are found. Used by both generate_framework and
+// generate_article so every framework/blog ends with video suggestions.
+async function buildYouTubeVideosSection(topicStr) {
+  try {
+    const yt = await suggestYouTubeVideos(topicStr);
+    if (!yt?.found || !yt.videos?.length) return '';
+    const lines = yt.videos.slice(0, 4)
+      .map(v => `- ${v.markdownLink || `[${v.title}](${v.url})`}`)
+      .join('\n');
+    return '\n\n---\n\n## 🎥 Suggested YouTube Videos\n\n' +
+      '*Embed one of these CloudFuze videos near the most relevant section — Gemini and Google AI Overviews favor pages with relevant video. These are real videos from CloudFuze\'s YouTube channel.*\n\n' +
+      lines;
+  } catch (e) {
+    console.log('  YouTube section skipped:', e.message);
+    return '';
+  }
+}
+
+// Research real FAQ questions for a topic (Google PAA + Reddit/Quora + AI), used
+// when generate_article is called without FAQs already approved. Returns an
+// array of question strings (top ~8). Cached per-topic via the research cache.
+async function researchTopicFaqs(topicStr, ip) {
+  if (!ip) return [];
+  try {
+    const cached = getCachedResearch(topicStr);
+    let faqData = cached?.faqData;
+    if (!faqData) {
+      const pageData = { url: null, title: topicStr, h1: topicStr, headings: [], paragraphs: [], existingFAQs: [], wordCount: 0, existingSchema: [], hasFAQSchema: false, summary: '' };
+      const discovery = await discoverQuestions(pageData, ip.type, ip.apiKey);
+      const prioritized = await prioritizeQuestions(discovery.questions || [], pageData, ip.type, ip.apiKey);
+      faqData = { discovery, prioritized };
+      setCachedResearch(topicStr, { faqData, fanoutData: cached?.fanoutData || null });
+    }
+    return (faqData?.prioritized?.prioritizedQuestions || [])
+      .map(f => f.question)
+      .filter(Boolean)
+      .slice(0, 8);
+  } catch (e) {
+    console.log('  FAQ research skipped:', e.message);
+    return [];
+  }
+}
 
 function buildArticleGenPrompt(params) {
   const parts = [];
@@ -3604,6 +3723,10 @@ You are writing AS ${params.writerName}. The article MUST sound like ${params.wr
 
   if (params.sharepointContext) {
     parts.push(`CLOUDFUZE INTERNAL PRODUCT DATA (from Migration Docs — USE THIS for accurate product information):\nThe following is real data from CloudFuze's internal documentation. Use these facts, features, supported combinations, and specifications in the article. Do NOT make up product details — use ONLY what is provided here. If the data includes supported migration paths, feature lists, or platform combinations, weave them naturally into the article.\n\n${params.sharepointContext}\n\nIMPORTANT: Cite specific features, supported platforms, and capabilities from the data above. This makes the article factually accurate and authoritative.\n\nMIGRATION DOCS SOURCE LINKING: Each Migration Docs source above has a "Source:" line with a name and URL. You MUST include these Migration Docs sources in the inline "📋 Sources for this section" block under EVERY section that uses Migration Docs data. Format: "> - [Migration Docs Title](URL) — 🔗 *Internal Migration Docs — verify product details*". Writers need these links directly under the relevant paragraph to verify product claims before publishing.`);
+  }
+
+  if (params.verifiedSources) {
+    parts.push(params.verifiedSources);
   }
 
   parts.push(`\nNow write the complete article. Output ONLY the article in Markdown format. No preamble, no notes, no commentary.`);
