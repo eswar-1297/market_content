@@ -101,45 +101,40 @@ function parseAIJson(text) {
   throw new Error('Failed to parse AI response as JSON: ' + text.substring(0, 300));
 }
 
-async function callLLM(prompt, systemPrompt, provider, apiKey, stepLabel = '') {
-  const start = Date.now();
-  const modelName = provider === 'openai' ? 'gpt-4o-mini' : provider === 'claude' ? 'claude-sonnet-4-20250514' : 'gemini-2.0-flash';
-  console.log(`  ${C.dim}├─${C.reset} ${C.magenta}Calling ${provider.toUpperCase()} (${modelName})...${C.reset}${stepLabel ? ` [${stepLabel}]` : ''}`);
-  console.log(`  ${C.dim}│  ├─ Prompt length: ${prompt.length} chars${C.reset}`);
+async function callOpenAI(prompt, systemPrompt, apiKey, start) {
+  const client = getOpenAIClient(apiKey);
+  const response = await client.chat.completions.create({
+    model: 'gpt-4o-mini',
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: prompt }
+    ],
+    temperature: 0.3,
+    max_tokens: 4000
+  });
+  const text = response.choices?.[0]?.message?.content || '';
+  const tokens = response.usage;
+  console.log(`  ${C.dim}│  ├─ Response: ${text.length} chars in ${Date.now() - start}ms${C.reset}`);
+  if (tokens) console.log(`  ${C.dim}│  └─ Tokens: ${tokens.prompt_tokens} prompt + ${tokens.completion_tokens} completion = ${tokens.total_tokens} total${C.reset}`);
+  return text;
+}
 
-  if (provider === 'openai') {
-    const client = getOpenAIClient(apiKey);
-    const response = await client.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: prompt }
-      ],
-      temperature: 0.3,
-      max_tokens: 4000
-    });
-    const text = response.choices?.[0]?.message?.content || '';
-    const tokens = response.usage;
-    console.log(`  ${C.dim}│  ├─ Response: ${text.length} chars in ${Date.now() - start}ms${C.reset}`);
-    if (tokens) console.log(`  ${C.dim}│  └─ Tokens: ${tokens.prompt_tokens} prompt + ${tokens.completion_tokens} completion = ${tokens.total_tokens} total${C.reset}`);
-    return text;
-  }
+async function callClaudeLLM(prompt, systemPrompt, apiKey, start) {
+  const { default: Anthropic } = await import('@anthropic-ai/sdk');
+  const client = new Anthropic({ apiKey, timeout: AI_TIMEOUT_MS });
+  const response = await client.messages.create({
+    model: 'claude-sonnet-4-20250514',
+    max_tokens: 4000,
+    system: systemPrompt,
+    messages: [{ role: 'user', content: prompt }],
+    temperature: 0.3
+  });
+  const text = response.content.filter(b => b.type === 'text').map(b => b.text).join('\n') || '';
+  console.log(`  ${C.dim}│  └─ Response: ${text.length} chars in ${Date.now() - start}ms${C.reset}`);
+  return text;
+}
 
-  if (provider === 'claude') {
-    const { default: Anthropic } = await import('@anthropic-ai/sdk');
-    const client = new Anthropic({ apiKey, timeout: AI_TIMEOUT_MS });
-    const response = await client.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 4000,
-      system: systemPrompt,
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.3
-    });
-    const text = response.content.filter(b => b.type === 'text').map(b => b.text).join('\n') || '';
-    console.log(`  ${C.dim}│  └─ Response: ${text.length} chars in ${Date.now() - start}ms${C.reset}`);
-    return text;
-  }
-
+async function callGeminiLLM(prompt, systemPrompt, apiKey, start) {
   const genAI = getGeminiClient(apiKey);
   const genModel = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
   const controller = new AbortController();
@@ -153,6 +148,29 @@ async function callLLM(prompt, systemPrompt, provider, apiKey, stepLabel = '') {
     return text;
   } finally {
     clearTimeout(timeout);
+  }
+}
+
+async function callLLM(prompt, systemPrompt, provider, apiKey, stepLabel = '') {
+  const start = Date.now();
+  const modelName = provider === 'openai' ? 'gpt-4o-mini' : provider === 'claude' ? 'claude-sonnet-4-20250514' : 'gemini-2.0-flash';
+  console.log(`  ${C.dim}├─${C.reset} ${C.magenta}Calling ${provider.toUpperCase()} (${modelName})...${C.reset}${stepLabel ? ` [${stepLabel}]` : ''}`);
+  console.log(`  ${C.dim}│  ├─ Prompt length: ${prompt.length} chars${C.reset}`);
+
+  try {
+    if (provider === 'openai') return await callOpenAI(prompt, systemPrompt, apiKey, start);
+    if (provider === 'claude') return await callClaudeLLM(prompt, systemPrompt, apiKey, start);
+    return await callGeminiLLM(prompt, systemPrompt, apiKey, start);
+  } catch (err) {
+    // Resilient fallback: if the requested provider fails (e.g. Anthropic out of
+    // credits, rate limit, timeout), fall back to OpenAI so FAQ/fanout/keyword
+    // research still works. Without this, the whole FAQ section silently empties.
+    const fallbackKey = process.env.OPENAI_API_KEY;
+    if (provider !== 'openai' && fallbackKey) {
+      console.warn(`  ${C.dim}├─${C.reset} ${C.yellow}${provider.toUpperCase()} failed (${err.message}) — falling back to OpenAI (gpt-4o-mini)...${C.reset}`);
+      return await callOpenAI(prompt, systemPrompt, fallbackKey, start);
+    }
+    throw err;
   }
 }
 

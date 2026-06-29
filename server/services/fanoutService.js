@@ -282,6 +282,21 @@ function mergeFanouts(openaiResults, geminiResults, maxFanouts) {
   }));
 }
 
+// Run the primary provider; if it fails (e.g. Anthropic out of credits, rate
+// limit, timeout) and an OpenAI key is available, fall back to OpenAI so fanout
+// generation still succeeds instead of silently returning no queries.
+async function withOpenAIFallback(primaryFn, providerLabel, userPrompt) {
+  try {
+    return await primaryFn();
+  } catch (err) {
+    if (process.env.OPENAI_API_KEY) {
+      console.warn(`${providerLabel} fanout failed (${err.message}) — falling back to OpenAI (gpt-4o-mini)...`);
+      return await generateWithOpenAI(userPrompt);
+    }
+    throw err;
+  }
+}
+
 export async function generateFanoutQueries(mainQuery, domain, maxFanouts = 10, provider = 'openai') {
   console.log('\n=== Generating Fanout Queries ===');
   console.log('Main Query:', mainQuery);
@@ -317,10 +332,10 @@ export async function generateFanoutQueries(mainQuery, domain, maxFanouts = 10, 
       fanouts = mergeFanouts(oaiData, gemData, maxFanouts);
     }
   } else if (provider === 'gemini') {
-    const parsed = await generateWithGemini(userPrompt);
+    const parsed = await withOpenAIFallback(() => generateWithGemini(userPrompt), 'Gemini', userPrompt);
     fanouts = parsed.fanouts || [];
   } else if (provider === 'claude') {
-    const parsed = await generateWithClaude(userPrompt);
+    const parsed = await withOpenAIFallback(() => generateWithClaude(userPrompt), 'Claude', userPrompt);
     fanouts = parsed.fanouts || [];
   } else {
     const parsed = await generateWithOpenAI(userPrompt);
