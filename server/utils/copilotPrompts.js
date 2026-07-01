@@ -58,6 +58,83 @@ NON-NEGOTIABLES:
 - Use the question-format H2 headings above (they match how buyers query AI engines).
 - Add supporting internal links (related migration guide, product feature page, demo/contact) and insert CTA opportunities naturally.`;
 
+// ═══ DECLARED CONTENT-FORMAT BRIEFS ═══
+// When a title promises a specific FORMAT (checklist, step-by-step, how-to,
+// template), the article/framework MUST follow that format instead of the
+// generic CSABF educational structure built from fanout questions. This is the
+// non-comparison analogue of COMPARISON_ARTICLE_BRIEF.
+
+export const CHECKLIST_ARTICLE_BRIEF = `CHECKLIST ARTICLE STANDARD ("... Checklist ...") — FOLLOW THIS EXACT STRUCTURE:
+The title promises a CHECKLIST, so the article's spine MUST be an actionable, itemized checklist the reader can execute and tick off — NOT a generic educational explainer built from fanout questions ("Why is X important?", "Benefits of X", "Common Challenges").
+Search intent: the reader wants a concrete, COMPREHENSIVE list of items/steps to complete. Funnel stage: consideration–action. Persona: the IT team executing the task.
+DEPTH REQUIREMENT: This must be the most thorough checklist available on this topic — an IT lead should be able to run the entire project from it without needing another resource. Use the full word budget. Err on the side of MORE phases and MORE items, each with real substance.
+
+REQUIRED STRUCTURE, IN ORDER:
+1. H1 — the checklist title (keep the word "Checklist" in it).
+2. INTRO (2–3 sentences): state what the checklist covers and who it's for; lead with a direct answer. Include one credible, sourced stat. No "in today's landscape" fluff.
+3. KEY TAKEAWAYS — 3–5 bullets summarizing the most critical checklist items.
+4. THE CHECKLIST — this is the CORE and LONGEST part (aim for ~70% of the article). Organize as 4–6 phase-based H2 sections mapping the FULL task lifecycle — adapt to the topic, but be exhaustive. For a migration checklist, cover at minimum: Pre-Migration Assessment & Planning; Security, Compliance & Legal; Communication & Change Management; Migration Execution; Post-Migration Validation; and Decommissioning/Cutover.
+   Under each phase H2:
+   - Write a 1–2 sentence lead-in that frames what this phase accomplishes and the risk it mitigates.
+   - Then a CHECKBOX LIST of 6–10 items. EACH item is: "- [ ] **Imperative action** — one to two sentences of specific detail: HOW to do it, the exact platform/tool/setting/artifact involved, and what "done" looks like or what to watch for." Example: "- [ ] **Audit source mailbox inventory** — Run a report of all Google Workspace mailboxes, aliases, and shared drives; record item counts and total data volume so you can validate completeness post-migration and flag mailboxes over throttling thresholds."
+   - Where useful, add a short sub-checklist (indented "- [ ]" items) under a parent item for multi-part tasks.
+   - Name specific compliance standards (GDPR, HIPAA, SOC 2), retention/legal-hold considerations, and rollback criteria where relevant.
+5. OPTIONAL context H2s (max 1–2) ONLY if they aid execution — e.g. "Common Pitfalls to Avoid" as a checklist of what NOT to do, or a summary table (Phase | Owner | Key Risk | Verification). Do NOT pad with generic "Why is X important?" or "Benefits of X" sections.
+6. HOW CLOUDFUZE HELPS — tie SPECIFIC CloudFuze features to SPECIFIC checklist items (e.g. "Automated user mapping handles the identity-mapping items in the Execution phase"; "delta migration covers the re-sync verification items"). Include a measurable outcome. End with a soft CTA.
+7. FAQ SECTION — question-format H3s from real research, with 50–80 word answers.
+
+NON-NEGOTIABLES:
+- The checkbox items ARE the article. Every phase H2 MUST contain "- [ ]" items, and every item MUST carry a substantive detail clause — bare one-liners with no explanation are NOT acceptable.
+- COMPREHENSIVENESS: at least 4 phases and at least ~35 total checklist items across the article. Cover edge cases, compliance, communication, and rollback — not just the happy path.
+- Items must be specific and executable for THIS topic — name the exact platforms, tools, settings, and artifacts involved.
+- Do NOT convert fanout/FAQ questions into body H2s — the body is the checklist; questions go in the FAQ section only.
+- Use imperative phrasing ("Verify…", "Export…", "Map…", "Confirm…") so the list feels copy-and-execute ready, but always follow the action with its how/why detail.`;
+
+export const STEP_BY_STEP_ARTICLE_BRIEF = `STEP-BY-STEP / HOW-TO GUIDE STANDARD — FOLLOW THIS EXACT STRUCTURE:
+The title promises a step-by-step or how-to guide, so the spine MUST be an ordered sequence of numbered steps the reader follows start to finish — NOT a generic explainer built from fanout questions.
+Search intent: the reader wants to DO the task. Funnel stage: consideration–action. Persona: the IT practitioner performing the task.
+
+REQUIRED STRUCTURE, IN ORDER:
+1. H1 — the how-to / step title.
+2. INTRO (2–3 sentences) + a direct one-line answer to "how do you do this".
+3. KEY TAKEAWAYS — 3–5 bullets.
+4. PREREQUISITES — a short checklist of what's needed before starting.
+5. THE STEPS — the CORE: ordered H2 sections named "Step 1: …", "Step 2: …", etc. (or one "Steps" H2 with a substantial numbered list). Each step covers: what to do (imperative), how to verify it worked, and any topic-specific gotcha. Steps must be sequential and specific to THIS topic and the exact platforms named.
+6. HOW CLOUDFUZE HELPS — map CloudFuze features to the relevant steps. Soft CTA.
+7. FAQ SECTION — question-format H3s from real research.
+
+NON-NEGOTIABLES:
+- Body sections are STEPS in order — NOT fanout/FAQ questions turned into H2s.
+- Every step is concrete and executable for the exact platforms named. No generic "Benefits" / "Why is X important" sections.`;
+
+export const TEMPLATE_ARTICLE_BRIEF = `TEMPLATE ARTICLE STANDARD — FOLLOW THIS EXACT STRUCTURE:
+The title promises a reusable TEMPLATE, so the CORE deliverable is a ready-to-copy template block (with clearly marked [fill-in] placeholders) the reader can adapt — framed by brief usage guidance. Do NOT replace the template with a generic explainer.
+
+REQUIRED STRUCTURE, IN ORDER:
+1. H1 — the template title.
+2. INTRO (2–3 sentences): what the template is for and who uses it.
+3. KEY TAKEAWAYS — 3–5 bullets.
+4. THE TEMPLATE — the CORE: present the actual template inside a copyable block (code block or clearly delimited section) with [bracketed placeholders] for anything the reader must fill in. If the topic warrants several templates, give each its own H2.
+5. HOW TO USE THIS TEMPLATE — a short numbered list explaining how to adapt each placeholder.
+6. HOW CLOUDFUZE HELPS — connect CloudFuze features to the template's use case. Soft CTA.
+7. FAQ SECTION.
+
+NON-NEGOTIABLES:
+- The copyable template block is the centerpiece — it must actually appear, with placeholders.
+- Tailor the template to THIS topic and the exact platforms named. No generic filler sections.`;
+
+// Detect a DECLARED content format from the title/topic text. Returns
+// { format, brief } when the title promises a checklist / step-by-step / how-to /
+// template, else null. The non-comparison analogue of isComparisonArticle().
+export function getContentFormatBrief(...texts) {
+  const hay = texts.filter(Boolean).join(' ').toLowerCase();
+  if (/\bchecklist\b/.test(hay)) return { format: 'checklist', brief: CHECKLIST_ARTICLE_BRIEF };
+  if (/\bstep[- ]by[- ]step\b|\bin \d+ steps\b|\b\d+[- ]steps?\b|\bsteps to\b/.test(hay)) return { format: 'step-by-step', brief: STEP_BY_STEP_ARTICLE_BRIEF };
+  if (/\bhow[- ]to\b|\bhow do (you|i|we)\b/.test(hay)) return { format: 'how-to', brief: STEP_BY_STEP_ARTICLE_BRIEF };
+  if (/\btemplate\b/.test(hay)) return { format: 'template', brief: TEMPLATE_ARTICLE_BRIEF };
+  return null;
+}
+
 // Comparison-specific REVIEW checklist — appended to the standard review when the
 // content being reviewed is an "[A] vs [B]" comparison article.
 export const COMPARISON_REVIEW_CHECKLIST = `COMPARISON-ARTICLE REVIEW — the content is an "[A] vs [B]" comparison, so ALSO audit it against the B2B comparison standard. Report EACH item below as ✅ / ❌ with a specific fix and exact location when it fails:

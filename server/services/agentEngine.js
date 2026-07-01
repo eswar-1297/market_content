@@ -3,7 +3,7 @@ import { trackKeywords } from './keywordEngine.js';
 import { analyzeContent } from './ruleEngine.js';
 import { searchChunks } from '../db/copilotDb.js';
 import { getTodayTopicForWriter } from './contentCalendarService.js';
-import { suggestYouTubeVideos, searchG2Reviews, suggestTablesAndInfographics } from './agentTools.js';
+import { suggestYouTubeVideos, searchG2Reviews } from './agentTools.js';
 import { discoverQuestions, prioritizeQuestions, generateSemanticKeywords, scrapePage, analyzeGaps, extractArticleHtml } from './faqService.js';
 import { generateFanoutQueries } from './fanoutService.js';
 import { searchReddit } from './threadFinder/reddit.js';
@@ -17,7 +17,7 @@ import { searchAndFetchContent, getPageByUrl, isCftoolsDocsConfigured } from './
 import { getWriterBio, formatWriterBioForPrompt } from '../config/writerBios.js';
 import { formatBlogPatternsForPrompt, formatWriterPatternsForPrompt } from '../config/blogPatterns.js';
 import { htmlToMarkdown, extractHeadings, extractParagraphs, stripHtml } from '../utils/contentParser.js';
-import { ICP_FRAMEWORK, COMPARISON_ARTICLE_BRIEF, COMPARISON_REVIEW_CHECKLIST } from '../utils/copilotPrompts.js';
+import { ICP_FRAMEWORK, COMPARISON_ARTICLE_BRIEF, COMPARISON_REVIEW_CHECKLIST, getContentFormatBrief } from '../utils/copilotPrompts.js';
 
 // Detect a "[A] vs [B]" platform comparison article from its content type and topic/text.
 // Drives injection of the B2B comparison brief into generation, framework, and review.
@@ -1651,8 +1651,66 @@ export async function executeTool(toolName, args, writerId = 'default', articleR
       const topicStr = (args.topic || '').toString().trim();
       const contentType = (args.content_type || '').toString().trim();
       if (!topicStr) return JSON.stringify({ error: 'Topic is required.' });
-      const result = suggestTablesAndInfographics(topicStr, contentType);
-      return JSON.stringify(result);
+      if (!getInternalProvider()) return JSON.stringify({ error: 'No AI API key configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY in .env' });
+
+      try {
+        // Ground suggestions in the ACTUAL article/framework in the editor when present,
+        // so tables/infographics are specific to what the article covers — not generic templates.
+        const rawHTML = articleRequirements._currentHTML || '';
+        const currentArticle = (rawHTML ? htmlToMarkdown(rawHTML) : (articleRequirements._currentContent || '')).slice(0, 8000);
+        const headingsList = currentArticle
+          ? (currentArticle.match(/^#{1,3}\s+.+$/gm) || []).map(h => h.replace(/[#*`]/g, '').trim()).filter(Boolean).slice(0, 25)
+          : [];
+
+        const sys = `You are a GEO/AEO visual strategist for CloudFuze enterprise content. You propose ONLY tables and infographics that are SPECIFIC to the exact topic and that materially improve AI extractability or an IT buyer's decision-making. Every suggestion must contain real, topic-specific columns/data — never vague "features" or "benefits". Return ONLY valid JSON, no markdown fences.
+
+BANNED — never suggest these generic fillers: "Key Takeaways Summary Table", "Topic Overview Infographic", "Summary of Key Points", "Key Statistics" grab-bags, or a "Decision Framework" unless the article genuinely contains a real decision matrix with concrete criteria. These add no value and must never appear.`;
+
+        const prompt = `Suggest tables and infographics for this article.
+TOPIC: "${topicStr}"
+CONTENT TYPE: ${contentType || 'general'}
+${headingsList.length ? `\nCURRENT ARTICLE SECTIONS (place each visual under the exact section it best fits):\n${headingsList.map((h, i) => `${i + 1}. ${h}`).join('\n')}` : ''}
+${currentArticle ? `\nARTICLE CONTENT (base every suggestion on what this article ACTUALLY covers — do NOT invent data the article cannot support):\n${currentArticle}` : '\n(No article content in the editor yet — base suggestions on the topic itself, and make each one concretely specific to it.)'}
+
+RULES:
+- Propose 2-4 TABLES and 1-3 INFOGRAPHICS, but ONLY ones that genuinely fit THIS topic. Fewer, highly-relevant suggestions are better than padding — NEVER invent a suggestion just to hit a count.
+- Every TABLE must specify: a specific title; the EXACT columns (3-5); one realistic exampleRow showing the KIND of real data that fills it (drawn from this topic/article); and the exact section/placement.
+- Every INFOGRAPHIC must specify: a specific title; exactly what it visualizes (the concrete steps/phases/data points, e.g. named migration phases); placement; and keyword-rich alt text.
+- Name specific platforms, features, standards, and metrics from the topic/article.
+- If the article already contains a table or list covering something, do NOT re-suggest it.
+- If a good visual genuinely doesn't fit a topic, return fewer — an empty array is acceptable.
+
+Return JSON exactly in this shape:
+{
+  "tableSuggestions": [ { "title": "...", "why": "why THIS table helps for THIS topic (1 sentence)", "columns": ["...","..."], "exampleRow": ["...","..."], "placement": "exact section name or position" } ],
+  "infographicSuggestions": [ { "title": "...", "visualizes": "the concrete content it shows", "placement": "exact section name or position", "altText": "keyword-rich alt text" } ]
+}`;
+
+        const raw = await callClaude(sys, prompt, { maxTokens: 2000, temperature: 0.3, timeout: 45000 });
+        const stripped = (raw || '').replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+        let parsed;
+        try {
+          parsed = JSON.parse(stripped);
+        } catch {
+          const s = stripped.indexOf('{'), e = stripped.lastIndexOf('}');
+          parsed = (s !== -1 && e > s) ? JSON.parse(stripped.slice(s, e + 1)) : { tableSuggestions: [], infographicSuggestions: [] };
+        }
+
+        const tableSuggestions = Array.isArray(parsed.tableSuggestions) ? parsed.tableSuggestions : [];
+        const infographicSuggestions = Array.isArray(parsed.infographicSuggestions) ? parsed.infographicSuggestions : [];
+
+        return JSON.stringify({
+          topic: topicStr,
+          contentType: contentType || 'general',
+          groundedInContent: currentArticle.length > 50,
+          tableSuggestions,
+          infographicSuggestions,
+          suggestions: [...tableSuggestions, ...infographicSuggestions],
+          instruction: 'Present the table suggestions and infographic suggestions under separate headings. For each, show the title, why it fits THIS article, the exact columns (with the example row) or what it visualizes, the recommended placement, and alt text. These are tailored to the actual article — do NOT add generic "summary" tables on top.'
+        });
+      } catch (e) {
+        return JSON.stringify({ error: `Table/infographic suggestion failed: ${e.message}` });
+      }
     }
 
     case 'generate_faqs': {
@@ -2397,6 +2455,16 @@ ${catLines}`;
           }
         }
 
+        // Detect a DECLARED content format (checklist, step-by-step, how-to, template)
+        // from the topic/context. If present, its structure overrides the generic
+        // CSABF section order — so a "Checklist" title yields an actual checklist,
+        // not a generic explainer built from fanout queries. Comparison takes priority.
+        const _cmpFramework = isComparisonArticle(contentType, topicStr, additionalContext);
+        const _fmtFramework = _cmpFramework ? null : getContentFormatBrief(topicStr, additionalContext);
+        const formatDirective = _fmtFramework
+          ? `\n${_fmtFramework.brief}\n\nPRECEDENCE: The requested title declares a ${_fmtFramework.format.toUpperCase()} format. This ${_fmtFramework.format} structure OVERRIDES the generic CSABF section order below. The body MUST follow the format above — do NOT build generic "Why Is X Important?", "Benefits of X", or "Common Challenges" sections out of fanout/FAQ queries. Fanout and FAQ questions belong in the FAQ section ONLY.\n`
+          : '';
+
         // ═══ PHASE 3: Generate framework with AI, now enriched with FAQ + fanout data ═══
         const frameworkPrompt = `Generate a detailed, TOPIC-SPECIFIC article framework/outline for the topic below. This framework will be inserted into the writer's editor as a starting structure.
 
@@ -2448,7 +2516,7 @@ IMPORTANT: The topic below is just a topic name — NOT an H1 title. You MUST cr
 
 TOPIC: "${topicStr}"
 CONTENT TYPE: ${contentType}
-${isComparisonArticle(contentType, topicStr, additionalContext) ? `\n${COMPARISON_ARTICLE_BRIEF}\n\nPRECEDENCE: This is a comparison article. The B2B comparison structure ABOVE overrides the generic CSABF section order below — produce ALL of its sections (Intro Summary Block, Key Takeaways table, At-a-Glance table, the six question-format comparison H2s, Pros and Cons for BOTH products, the Migrating section, FAQ, and Final Verdict). Still keep the "How CloudFuze Helps" angle inside the Migrating section.\n` : ''}${additionalContext ? `ADDITIONAL CONTEXT: ${additionalContext}` : ''}${spContext}${sourcePoolContext}${faqFanoutContext}${fanoutStructureHint}
+${_cmpFramework ? `\n${COMPARISON_ARTICLE_BRIEF}\n\nPRECEDENCE: This is a comparison article. The B2B comparison structure ABOVE overrides the generic CSABF section order below — produce ALL of its sections (Intro Summary Block, Key Takeaways table, At-a-Glance table, the six question-format comparison H2s, Pros and Cons for BOTH products, the Migrating section, FAQ, and Final Verdict). Still keep the "How CloudFuze Helps" angle inside the Migrating section.\n` : ''}${formatDirective}${additionalContext ? `ADDITIONAL CONTEXT: ${additionalContext}` : ''}${spContext}${sourcePoolContext}${faqFanoutContext}${fanoutStructureHint}
 ${blogPatternsText}
 ${writerBioText ? `\n${writerBioText}` : ''}
 ${writerPatternsText ? `\n${writerPatternsText}\n\nCRITICAL: The framework MUST follow this writer's preferred article structure, H2 heading style, tone, and target audience. Match their actual published patterns.` : ''}
@@ -3652,6 +3720,14 @@ Both goals reinforce each other: authoritative, specific content is both more ci
   // Comparison articles ("[A] vs [B]") must follow the B2B comparison standard.
   if (isComparisonArticle(params.contentType, params.topic, params.primaryKeyword)) {
     parts.push(COMPARISON_ARTICLE_BRIEF + `\n\nPRECEDENCE: This is a comparison article. The B2B comparison structure ABOVE overrides the generic article structure — produce ALL of its sections in order (Intro Summary Block, Key Takeaways table, At-a-Glance table, the six question-format comparison H2s, Pros and Cons for BOTH products, the "What to Consider When Migrating" section, FAQ, and Final Verdict). Fold "How CloudFuze Helps" into the Migrating section — do NOT add it as a separate generic section.`);
+  } else {
+    // A DECLARED format in the title (checklist, step-by-step, how-to, template)
+    // overrides the generic educational structure — so a "Checklist" title produces
+    // an actual checklist, not a fanout-derived explainer.
+    const fmt = getContentFormatBrief(params.topic, params.primaryKeyword, params.editorFramework);
+    if (fmt) {
+      parts.push(fmt.brief + `\n\nPRECEDENCE: The title declares a ${fmt.format.toUpperCase()} format. This structure OVERRIDES the generic article structure — the body MUST follow the format above, NOT generic "Why Is X Important?" / "Benefits" / "Common Challenges" sections built from fanout queries. Fanout and FAQ questions belong in the FAQ section only.`);
+    }
   }
 
   if (params.primaryKeyword) {
