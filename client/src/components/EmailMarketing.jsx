@@ -139,6 +139,7 @@ function ContactsTab() {
         <div className="relative flex-1 min-w-[200px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
           <input
+            data-hj-suppress
             value={search} onChange={e => setSearch(e.target.value)}
             placeholder="Search contacts..."
             className="w-full pl-10 pr-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
@@ -158,9 +159,9 @@ function ContactsTab() {
         <div className="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 p-4 space-y-3">
           <h3 className="text-sm font-semibold text-gray-900 dark:text-white">Add Contact</h3>
           <div className="grid gap-3 sm:grid-cols-3">
-            <input value={email} onChange={e => setEmail(e.target.value)} placeholder="email@example.com"
+            <input data-hj-suppress value={email} onChange={e => setEmail(e.target.value)} placeholder="email@example.com"
               className="px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-white" />
-            <input value={name} onChange={e => setName(e.target.value)} placeholder="Name (optional)"
+            <input data-hj-suppress value={name} onChange={e => setName(e.target.value)} placeholder="Name (optional)"
               className="px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-white" />
             <input value={tags} onChange={e => setTags(e.target.value)} placeholder="Tags (optional)"
               className="px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-white" />
@@ -176,7 +177,7 @@ function ContactsTab() {
         <div className="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 p-4 space-y-3">
           <h3 className="text-sm font-semibold text-gray-900 dark:text-white">Bulk Import</h3>
           <p className="text-xs text-gray-500 dark:text-gray-400">One contact per line: <code>email, name, tags</code></p>
-          <textarea value={bulkText} onChange={e => setBulkText(e.target.value)}
+          <textarea data-hj-suppress value={bulkText} onChange={e => setBulkText(e.target.value)}
             rows={6} placeholder="john@example.com, John Doe, partner&#10;jane@example.com, Jane Smith, client"
             className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-white font-mono" />
           <div className="flex gap-2">
@@ -209,8 +210,8 @@ function ContactsTab() {
             <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
               {filtered.map(c => (
                 <tr key={c.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/30">
-                  <td className="px-4 py-3 text-gray-900 dark:text-white font-medium">{c.email}</td>
-                  <td className="px-4 py-3 text-gray-600 dark:text-gray-400">{c.name || '—'}</td>
+                  <td data-hj-suppress className="px-4 py-3 text-gray-900 dark:text-white font-medium">{c.email}</td>
+                  <td data-hj-suppress className="px-4 py-3 text-gray-600 dark:text-gray-400">{c.name || '—'}</td>
                   <td className="px-4 py-3 text-gray-600 dark:text-gray-400">{c.tags || '—'}</td>
                   <td className="px-4 py-3 text-center">
                     <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${
@@ -521,8 +522,8 @@ function CampaignsTab() {
                   <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
                     {detail.recipients.map(r => (
                       <tr key={r.id}>
-                        <td className="py-2 text-gray-900 dark:text-white">{r.email}</td>
-                        <td className="py-2 text-gray-600 dark:text-gray-400">{r.name || '—'}</td>
+                        <td data-hj-suppress className="py-2 text-gray-900 dark:text-white">{r.email}</td>
+                        <td data-hj-suppress className="py-2 text-gray-600 dark:text-gray-400">{r.name || '—'}</td>
                         <td className="py-2 text-center">
                           {r.status === 'sent' ? <CheckCircle2 className="w-4 h-4 text-green-500 mx-auto" /> : <span className="text-gray-400">—</span>}
                         </td>

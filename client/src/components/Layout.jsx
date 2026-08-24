@@ -1,10 +1,18 @@
 import { useState, useEffect } from 'react'
 import { Sun, Moon, Sparkles, LogOut } from 'lucide-react'
 import { useMsal } from '@azure/msal-react'
+import { identifyHotjarUser } from '../analytics/hotjar.js'
 
 export default function Layout({ children }) {
   const { instance, accounts } = useMsal()
   const account = accounts[0]
+
+  // Attribute the Hotjar session once the signed-in account is actually resolved. Layout renders
+  // only inside AuthenticatedTemplate, so this is the first point the user is known. No-ops when
+  // Hotjar is disabled.
+  useEffect(() => {
+    if (account) identifyHotjarUser(account)
+  }, [account])
 
   const [dark, setDark] = useState(() => {
     return localStorage.getItem('theme') === 'dark'
@@ -39,7 +47,8 @@ export default function Layout({ children }) {
               <div className="w-7 h-7 rounded-full bg-indigo-100 dark:bg-indigo-900/40 flex items-center justify-center text-xs font-bold text-indigo-600 dark:text-indigo-400">
                 {(account.name || account.username || '?').charAt(0).toUpperCase()}
               </div>
-              <span className="text-xs text-gray-600 dark:text-gray-400 hidden sm:inline">
+              {/* Suppressed: the signed-in user's name/email is PII and shows on every page. */}
+              <span data-hj-suppress className="text-xs text-gray-600 dark:text-gray-400 hidden sm:inline">
                 {account.name || account.username}
               </span>
             </div>

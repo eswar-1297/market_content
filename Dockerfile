@@ -15,6 +15,12 @@ COPY client/package*.json ./client/
 COPY server/package*.json ./server/
 RUN npm install --prefix client && npm install --prefix server
 
+# Hotjar Site ID baked into the bundle as a default. Optional: leave unset and Hotjar stays off,
+# or override at runtime by editing client/dist/runtime-config.js on the server. Must be an ARG (not
+# just a compose `environment:` entry) because Vite reads it from the `npm run build` process env.
+ARG VITE_HOTJAR_SITE_ID
+ENV VITE_HOTJAR_SITE_ID=${VITE_HOTJAR_SITE_ID}
+
 # Copy source (node_modules excluded via .dockerignore) and build the client bundle.
 COPY . .
 RUN npm run build --prefix client

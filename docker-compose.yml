@@ -31,7 +31,11 @@ services:
       retries: 12
 
   app:
-    build: .
+    build:
+      context: .
+      args:
+        # Build arg, not `environment:` -- the client bundle is built at image build time.
+        VITE_HOTJAR_SITE_ID: ${HOTJAR_SITE_ID:-}
     restart: unless-stopped
     depends_on:
       db:
